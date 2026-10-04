@@ -34,9 +34,7 @@
   V(InvalidatedSlotsFastToSlow)                             \
   V(InvalidatedSlotsSomeInvalidatedRanges)                  \
   V(TestNewSpaceRefsInCopiedCode)                           \
-  V(GCFlags)                                                \
   V(MarkCompactCollector)                                   \
-  V(MarkCompactEpochCounter)                                \
   V(MemoryReducerActivationForSmallHeaps)                   \
   V(NoPromotion)                                            \
   V(NumberStringCacheSize)                                  \
@@ -49,15 +47,10 @@
   V(TestSizeOfObjects)                                      \
   V(Regress10560)                                           \
   V(Regress538257)                                          \
-  V(Regress587004)                                          \
-  V(Regress589413)                                          \
   V(Regress658718)                                          \
-  V(Regress670675)                                          \
   V(Regress777177)                                          \
   V(Regress779503)                                          \
   V(Regress791582)                                          \
-  V(Regress845060)                                          \
-  V(RegressMissingWriteBarrierInAllocate)                   \
   V(WriteBarrier_Marking)                                   \
   V(WriteBarrier_MarkingExtension)                          \
   V(WriteBarriersInCopyJSObject)                            \

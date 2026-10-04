@@ -12,6 +12,7 @@
 #include "include/v8-internal.h"
 #include "src/base/bit-field.h"
 #include "src/handles/handles.h"
+#include "src/objects/managed-type-id.h"
 #include "src/sandbox/sandbox.h"
 
 namespace v8::internal {
@@ -56,7 +57,7 @@ struct SharedWasmMemoryData;
 // and the destructor frees the memory (and page allocation if necessary).
 class V8_EXPORT_PRIVATE BackingStore : public BackingStoreBase {
  public:
-  static constexpr ExternalPointerTag kManagedTag = kBackingStoreTag;
+  static constexpr ManagedTypeId kTypeID = ManagedTypeId::kBackingStore;
 
   ~BackingStore();
 
@@ -105,6 +106,12 @@ class V8_EXPORT_PRIVATE BackingStore : public BackingStoreBase {
   size_t byte_length(
       std::memory_order memory_order = std::memory_order_relaxed) const {
     return byte_length_.load(memory_order);
+  }
+  // Returns the address of the atomic byte length. Used by WebAssembly shared
+  // memories to observe dynamic growth directly from JIT code without writing
+  // to trusted space.
+  const std::atomic<size_t>* byte_length_address() const {
+    return &byte_length_;
   }
   size_t max_byte_length() const { return max_byte_length_; }
   size_t byte_capacity() const { return byte_capacity_; }
@@ -177,11 +184,6 @@ class V8_EXPORT_PRIVATE BackingStore : public BackingStoreBase {
                                                size_t new_pages,
                                                size_t max_pages,
                                                WasmMemoryFlag wasm_memory);
-
-  // Attach the given memory object to this backing store. The memory object
-  // will be updated if this backing store is grown.
-  void AttachSharedWasmMemoryObject(
-      Isolate* isolate, DirectHandle<WasmMemoryObject> memory_object);
 
   // Send asynchronous updates to attached memory objects in other isolates
   // after the backing store has been grown. Memory objects in this
@@ -337,22 +339,17 @@ class V8_EXPORT_PRIVATE BackingStore : public BackingStoreBase {
 // of wasm memory objects.
 class GlobalBackingStoreRegistry {
  public:
-  // Register a backing store in the global registry. A mapping from the
-  // {buffer_start} to the backing store object will be added. The backing
-  // store will automatically unregister itself upon destruction.
-  // Only wasm memory backing stores are supported.
-  static void Register(std::shared_ptr<BackingStore> backing_store);
+  // Adds the given memory object to the backing store's weak list
+  // of memory objects and registers the backing store if not yet registered
+  // (under the registry lock).
+  static void AddSharedWasmMemoryObject(
+      Isolate* isolate, std::shared_ptr<BackingStore> backing_store,
+      DirectHandle<WasmMemoryObject> memory_object);
 
  private:
   friend class BackingStore;
   // Unregister a backing store in the global registry.
   static void Unregister(BackingStore* backing_store);
-
-  // Adds the given memory object to the backing store's weak list
-  // of memory objects (under the registry lock).
-  static void AddSharedWasmMemoryObject(
-      Isolate* isolate, BackingStore* backing_store,
-      DirectHandle<WasmMemoryObject> memory_object);
 
   // Purge any shared wasm memory lists that refer to this isolate.
   static void Purge(Isolate* isolate);

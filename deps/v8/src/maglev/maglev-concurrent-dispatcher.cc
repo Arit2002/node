@@ -124,7 +124,7 @@ CompilationJob::Status MaglevCompilationJob::AbortOptimization(
 
 CompilationJob::Status MaglevCompilationJob::PrepareJobImpl(Isolate* isolate) {
   if (function()->shared()->GetBytecodeArray(isolate)->length() >
-      v8_flags.max_optimized_bytecode_size) {
+      v8_flags.max_maglev_optimized_bytecode_size) {
     return AbortOptimization(isolate, BailoutReason::kFunctionTooBig);
   }
   BeginPhaseKind("V8.MaglevPrepareJob");
@@ -179,28 +179,26 @@ CompilationJob::Status MaglevCompilationJob::FinalizeJobImpl(Isolate* isolate) {
         CachedTieringDecision::kNormal);
   }
   info()->set_code(code);
-  GlobalHandleVector<Map> maps = CollectRetainedMaps(isolate, code);
-  RegisterWeakObjectsInOptimizedCode(
-      isolate, info()->broker()->target_native_context().object(), code,
-      std::move(maps));
+  if (v8_flags.maglev_build_code_on_background) {
+    RegisterWeakObjectsInOptimizedCode(
+        isolate, info()->broker()->target_native_context().object(), code,
+        info()->code_generator()->retained_maps());
+  } else {
+    RetainedMaps maps = OptimizedCompilationJob::CollectRetainedMaps(
+        code, info()->DetachCanonicalHandles());
+    RegisterWeakObjectsInOptimizedCode(
+        isolate, info()->broker()->target_native_context().object(), code,
+        base::VectorOf(maps));
+  }
   EndPhaseKind();
   return CompilationJob::SUCCEEDED;
 }
 
-GlobalHandleVector<Map> MaglevCompilationJob::CollectRetainedMaps(
-    Isolate* isolate, DirectHandle<Code> code) {
-  if (v8_flags.maglev_build_code_on_background) {
-    return info()->code_generator()->RetainedMaps(isolate);
-  }
-  return OptimizedCompilationJob::CollectRetainedMaps(isolate, code);
-}
-
 void MaglevCompilationJob::DisposeOnMainThread(Isolate* isolate) {
-  // Drop canonical handles on the main thread, to avoid (in the case of
-  // background job destruction) needing to unpark the local isolate on the
-  // background thread for unregistering the identity map's strong roots.
   DCHECK_EQ(ThreadId::Current(), isolate->thread_id());
-  info()->DetachCanonicalHandles()->Clear();
+  if (auto canonical_handles = info()->DetachCanonicalHandles()) {
+    canonical_handles->Clear();
+  }
 }
 
 MaybeIndirectHandle<Code> MaglevCompilationJob::code() const {
@@ -304,13 +302,15 @@ class MaglevConcurrentDispatcher::JobTask final : public v8::JobTask {
                   RuntimeCallCounterId::kOptimizeBackgroundMaglev);
         CompilationJob::Status status =
             job->ExecuteJob(local_isolate.runtime_call_stats(), &local_isolate);
-        if (status == CompilationJob::SUCCEEDED) {
-          outgoing_queue()->Enqueue(std::move(job));
-          isolate()->stack_guard()->RequestInstallMaglevCode();
-        } else {
-          UnparkedScope unparked_scope(&local_isolate);
-          job.reset();
-        }
+        // A retry leaves the job in kReadyToExecute, which finalization cannot
+        // handle, so it must never reach the outgoing queue.
+        CHECK_NE(status, CompilationJob::RETRY_ON_MAIN_THREAD);
+        outgoing_queue()->Enqueue(std::move(job));
+        // Requests the interrupt that finalizes the job on the main thread,
+        // which happens even in case of failure.
+        // TODO(victorgomes): Consider renaming this to
+        // RequestMaglevJobFinalization.
+        isolate()->stack_guard()->RequestInstallMaglevCode();
       } else if (destruction_queue()->Dequeue(&job)) {
         // Maglev jobs aren't cheap to destruct, so destroy them here in the
         // background thread rather than on the main thread.
@@ -318,7 +318,6 @@ class MaglevConcurrentDispatcher::JobTask final : public v8::JobTask {
         TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("v8.compile"),
                     "V8.MaglevDestructBackground",
                     perfetto::TerminatingFlow::ProcessScoped(job->trace_id()));
-        UnparkedScope unparked_scope(&local_isolate);
         job.reset();
       } else {
         break;

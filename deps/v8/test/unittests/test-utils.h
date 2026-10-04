@@ -46,8 +46,13 @@ static v8::Local<v8::External> MakeData(v8::Isolate* isolate, void* pointer) {
 template <typename T, typename TCallbackInfo>
 static T* GetData(const TCallbackInfo& info) {
   USE(MakeData);
-  return reinterpret_cast<T*>(
-      v8::External::Cast(*info.Data())->Value(kTestConfigTag));
+  v8::Local<v8::Data> data;
+  if constexpr (requires { info.DataV2(); }) {
+    data = info.DataV2();
+  } else {
+    data = info.Data();
+  }
+  return reinterpret_cast<T*>(v8::External::Cast(*data)->Value(kTestConfigTag));
 }
 
 class ArrayBufferAllocator;
@@ -440,8 +445,18 @@ class WithInternalIsolateMixin : public TMixin {
     return Cast<T>(RunJSInternal(source));
   }
 
+  template <typename T = Object>
+  Handle<T> RunJS(v8::Local<v8::Context> context, const char* source) {
+    return Cast<T>(RunJSInternal(context, source));
+  }
+
   Handle<Object> RunJSInternal(const char* source) {
     return Utils::OpenHandle(*TMixin::RunJS(source));
+  }
+
+  Handle<Object> RunJSInternal(v8::Local<v8::Context> context,
+                               const char* source) {
+    return Utils::OpenHandle(*TMixin::RunJS(context, source));
   }
 
   template <typename T = Object>

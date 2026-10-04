@@ -17,7 +17,11 @@ namespace internal {
 // other than Smi. It doesn't carry any functionality but allows primitive
 // classes to be identified in the type system.
 V8_OBJECT class PrimitiveHeapObject : public HeapObject {
+  V8_IT_ABSTRACT;
+
  public:
+  using HeapObject::HeapObject;
+
   DECL_VERIFIER(PrimitiveHeapObject)
 } V8_OBJECT_END;
 

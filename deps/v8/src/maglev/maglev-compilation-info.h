@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 
+#include "src/compiler/heap-refs.h"
 #include "src/flags/flags.h"
 #include "src/handles/handles.h"
 #include "src/handles/maybe-handles.h"

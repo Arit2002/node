@@ -846,6 +846,10 @@ ExternalReference ExternalReference::address_of_builtin_subclassing_flag() {
   return ExternalReference(&v8_flags.builtin_subclassing);
 }
 
+ExternalReference ExternalReference::address_of_js_pr_3883_flag() {
+  return ExternalReference(&v8_flags.js_pr_3883);
+}
+
 ExternalReference ExternalReference::address_of_runtime_stats_flag() {
   return ExternalReference(&TracingFlags::runtime_stats);
 }
@@ -1111,6 +1115,8 @@ FUNCTION_REFERENCE(re_experimental_match_for_call_from_js,
                    regexp::ExperimentalRegExp::MatchForCallFromJs)
 
 FUNCTION_REFERENCE(re_atom_exec_raw, RegExp::AtomExecRaw)
+
+FUNCTION_REFERENCE(re_split_cache_enter, regexp::ResultsCache::EnterRaw)
 
 FUNCTION_REFERENCE(allocate_regexp_result_vector,
                    regexp::ResultVector::Allocate)
@@ -1887,17 +1893,39 @@ void tsan_release_store_64_bits(Address addr, int64_t value) {
 #endif  // V8_TARGET_ARCH_X64
 }
 
-// Same as above, for relaxed loads.
-base::Atomic32 tsan_relaxed_load_32_bits(Address addr, int64_t value) {
+// Similarly like above, for relaxed loads.
+// If `invoke_tsan_acquire`, the `shared_base` parameter is a wasm shared object
+// and is the base object of `addr`. In that case we must invoke TSAN_ACQUIRE
+// to define the dependence between the initialization release fence and this
+// load.
+base::Atomic32 tsan_relaxed_load_32_bits(Address addr, Address shared_base,
+                                         int32_t invoke_tsan_acquire) {
 #if V8_TARGET_ARCH_X64
+  if (invoke_tsan_acquire) {
+    // We might reach this point with a non-shared object, because wasm anyref
+    // may hold a shared reference.
+    Tagged<HeapObject> object(
+        reinterpret_cast<HeapObject*>(shared_base - kHeapObjectTag));
+    if (HeapLayout::InWritableSharedSpace(object)) {
+      TSAN_ACQUIRE(object.address());
+    }
+  }
   return base::Relaxed_Load(reinterpret_cast<base::Atomic32*>(addr));
 #else
   UNREACHABLE();
 #endif  // V8_TARGET_ARCH_X64
 }
 
-base::Atomic64 tsan_relaxed_load_64_bits(Address addr, int64_t value) {
+base::Atomic64 tsan_relaxed_load_64_bits(Address addr, Address shared_base,
+                                         int32_t invoke_tsan_acquire) {
 #if V8_TARGET_ARCH_X64
+  if (invoke_tsan_acquire) {
+    Tagged<HeapObject> object(
+        reinterpret_cast<HeapObject*>(shared_base - kHeapObjectTag));
+    if (HeapLayout::InWritableSharedSpace(object)) {
+      TSAN_ACQUIRE(object.address());
+    }
+  }
   return base::Relaxed_Load(reinterpret_cast<base::Atomic64*>(addr));
 #else
   UNREACHABLE();

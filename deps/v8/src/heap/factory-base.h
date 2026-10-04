@@ -16,7 +16,12 @@
 #include "src/objects/function-kind.h"
 #include "src/objects/instance-type.h"
 #include "src/roots/roots.h"
+#ifndef V8_METAGEN_GENERATION_PASS
+// Forward declarations only, and generated after the metagen harvest
+// parses this header. The harvest reads class definitions, so nothing
+// it collects comes from here.
 #include "torque-generated/class-forward-declarations.h"
+#endif
 
 namespace v8 {
 namespace internal {
@@ -32,12 +37,14 @@ template <typename T, typename Base>
 class FixedIntegerArrayBase;
 class FreshlyAllocatedBigInt;
 class FunctionLiteral;
+class FunctionTemplateRareData;
 class HeapObject;
 class ObjectBoilerplateDescription;
 template <typename T>
 class PodArray;
 class PreparseData;
 class RegExpBoilerplateDescription;
+class RegExpDataWrapper;
 class SeqOneByteString;
 class SeqTwoByteString;
 class SharedFunctionInfo;
@@ -101,6 +108,9 @@ class FactoryBase {
 #define ROOT_ACCESSOR(Type, name, CamelName) inline Handle<Type> name();
   READ_ONLY_ROOT_LIST(ROOT_ACCESSOR)
   MUTABLE_ROOT_LIST(ROOT_ACCESSOR)
+#ifndef V8_ENABLE_TDZ_HOLE
+  ROOT_ACCESSOR(TdzHole, tdz_hole_value, TdzHoleValue)
+#endif
 #undef ROOT_ACCESSOR
 
   // Numbers (e.g. literals) are pretenured by the parser.
@@ -119,14 +129,12 @@ class FactoryBase {
   inline Handle<HeapNumber> NewHeapNumber(double value);
   template <AllocationType allocation = AllocationType::kYoung>
   inline Handle<HeapNumber> NewHeapNumberFromBits(uint64_t bits);
-  template <AllocationType allocation = AllocationType::kYoung>
-  inline Handle<HeapNumber> NewHeapNumberWithHoleNaN();
 
   template <AllocationType allocation = AllocationType::kYoung>
   inline Handle<HeapNumber> NewHeapInt32(int32_t value);
 
-  template <AllocationType allocation>
-  Handle<HeapNumber> NewHeapNumber();
+  template <AllocationType allocation = AllocationType::kYoung>
+  inline Handle<UninitializedHeapNumber> NewUninitializedHeapNumber();
 
   Handle<Struct> NewStruct(InstanceType type,
                            AllocationType allocation = AllocationType::kYoung);
@@ -432,6 +440,11 @@ class FactoryBase {
   inline Tagged<Struct> NewStructInternal(ReadOnlyRoots roots, Tagged<Map> map,
                                           int size, AllocationType allocation,
                                           bool initialize_fields);
+
+  AllocationWitness AllocateWithWitness(
+      int size, AllocationType allocation,
+      AllocationAlignment alignment = kTaggedAligned,
+      AllocationHint hint = AllocationHint());
 
   Tagged<HeapObject> AllocateRawWithImmortalMap(
       int size, AllocationType allocation, Tagged<Map> map,

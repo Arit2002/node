@@ -225,8 +225,10 @@ constexpr int TaggedArrayBase<Derived, ElementT, Super>::MaxRegularCapacity() {
 }
 
 // FixedArray describes fixed-sized arrays with element type Object.
-V8_OBJECT class FixedArray : public TaggedArrayBase<FixedArray, Object> {
-  using Super = TaggedArrayBase<FixedArray, Object>;
+V8_OBJECT class FixedArray
+    : public TaggedArrayBase<FixedArray, Object, FixedArrayBase> {
+  V8_IT_OWN_TYPE;
+  using Super = TaggedArrayBase<FixedArray, Object, FixedArrayBase>;
 
  public:
   static constexpr RootIndex kMapRootIndex = RootIndex::kFixedArrayMap;
@@ -316,6 +318,8 @@ V8_OBJECT class FixedArray : public TaggedArrayBase<FixedArray, Object> {
 
  public:
   // length_ / optional_padding_ live in FixedArrayBase.
+  V8_TQ_TAIL_NAME(objects);
+  V8_TQ_TAIL_LENGTH(length);
   FLEXIBLE_ARRAY_MEMBER(TaggedMember<Object>, objects);
 } V8_OBJECT_END;
 
@@ -356,6 +360,8 @@ V8_OBJECT class TrustedFixedArray
 
  public:
   // length_ / optional_padding_ live in TrustedFixedArrayBase.
+  V8_TQ_TAIL_NAME(objects);
+  V8_TQ_TAIL_LENGTH(length);
   FLEXIBLE_ARRAY_MEMBER(TaggedMember<Object>, objects);
 } V8_OBJECT_END;
 
@@ -394,6 +400,8 @@ V8_OBJECT class ProtectedFixedArray
 
  public:
   // length_ / optional_padding_ live in TrustedFixedArrayBase.
+  // Torque splits the flexible tail into indexed sections.
+  V8_TQ_TAIL_SECTIONS(objects[length] : TrustedObject | Smi;);
   FLEXIBLE_ARRAY_MEMBER(ElementMemberT, objects);
 } V8_OBJECT_END;
 
@@ -402,13 +410,15 @@ V8_OBJECT class ProtectedFixedArray
 // check: [FIRST_FIXED_ARRAY_TYPE, LAST_FIXED_ARRAY_TYPE].
 V8_OBJECT
 class FixedArrayExact final : public FixedArray {
+  V8_IT_NO_AUTO_CHECKER;
 } V8_OBJECT_END;
 
 // WeakFixedArray describes fixed-sized arrays with element type
 // Tagged<MaybeObject>.
 V8_OBJECT class WeakFixedArray
-    : public TaggedArrayBase<WeakFixedArray, MaybeObject> {
-  using Super = TaggedArrayBase<WeakFixedArray, MaybeObject>;
+    : public TaggedArrayBase<WeakFixedArray, MaybeObject, FixedArrayBase> {
+  V8_IT_OWN_TYPE;
+  using Super = TaggedArrayBase<WeakFixedArray, MaybeObject, FixedArrayBase>;
 
  public:
   static constexpr RootIndex kMapRootIndex = RootIndex::kWeakFixedArrayMap;
@@ -428,6 +438,8 @@ V8_OBJECT class WeakFixedArray
 
  public:
   // length_ / optional_padding_ live in FixedArrayBase.
+  V8_TQ_TAIL_NAME(objects);
+  V8_TQ_TAIL_LENGTH(length);
   FLEXIBLE_ARRAY_MEMBER(TaggedMember<MaybeObject>, objects);
 } V8_OBJECT_END;
 
@@ -436,8 +448,10 @@ V8_OBJECT class WeakFixedArray
 // It acts as a fixed-size lossy hashmap-based cache, where collisions
 // overwrite existing entries.
 V8_OBJECT class WeakHomomorphicFixedArray
-    : public TaggedArrayBase<WeakHomomorphicFixedArray, MaybeObject> {
-  using Super = TaggedArrayBase<WeakHomomorphicFixedArray, MaybeObject>;
+    : public TaggedArrayBase<WeakHomomorphicFixedArray, MaybeObject,
+                             FixedArrayBase> {
+  using Super =
+      TaggedArrayBase<WeakHomomorphicFixedArray, MaybeObject, FixedArrayBase>;
 
  public:
   static constexpr RootIndex kMapRootIndex =
@@ -458,6 +472,8 @@ V8_OBJECT class WeakHomomorphicFixedArray
 
  public:
   // length_ / optional_padding_ live in FixedArrayBase.
+  V8_TQ_TAIL_NAME(objects);
+  V8_TQ_TAIL_LENGTH(length);
   FLEXIBLE_ARRAY_MEMBER(TaggedMember<MaybeObject>, objects);
 } V8_OBJECT_END;
 
@@ -485,6 +501,8 @@ V8_OBJECT class TrustedWeakFixedArray
 
  public:
   // length_ / optional_padding_ live in TrustedFixedArrayBase.
+  V8_TQ_TAIL_NAME(objects);
+  V8_TQ_TAIL_LENGTH(length);
   FLEXIBLE_ARRAY_MEMBER(TaggedMember<MaybeObject>, objects);
 } V8_OBJECT_END;
 
@@ -512,8 +530,11 @@ V8_OBJECT class ProtectedWeakFixedArray
   DECL_VERIFIER(ProtectedWeakFixedArray)
 
   class BodyDescriptor;
+
  public:
   // length_ / optional_padding_ live in TrustedFixedArrayBase.
+  // Torque splits the flexible tail into indexed sections.
+  V8_TQ_TAIL_SECTIONS(objects[length] : TrustedObject | Smi;);
   FLEXIBLE_ARRAY_MEMBER(ElementMemberT, objects);
 } V8_OBJECT_END;
 
@@ -524,6 +545,7 @@ V8_OBJECT class ProtectedWeakFixedArray
 // dynamically with O(1) amortized insertion.
 V8_OBJECT class WeakArrayList
     : public TaggedArrayBase<WeakArrayList, MaybeObject, HeapObject> {
+  V8_IT_OWN_TYPE;
   using Super = TaggedArrayBase<WeakArrayList, MaybeObject, HeapObject>;
 
  public:
@@ -631,8 +653,10 @@ V8_OBJECT class WeakArrayList
   }
 
  public:
-  uint32_t capacity_;
+  V8_TQ_CONST uint32_t capacity_;
   uint32_t length_;
+  V8_TQ_TAIL_NAME(objects);
+  V8_TQ_TAIL_LENGTH(capacity);
   FLEXIBLE_ARRAY_MEMBER(TaggedMember<MaybeObject>, objects);
 } V8_OBJECT_END;
 
@@ -653,7 +677,6 @@ class WeakArrayList::Iterator {
   Tagged<WeakArrayList> array_;
   DISALLOW_GARBAGE_COLLECTION(no_gc_)
 };
-
 
 // A generic array that grows dynamically with O(1) amortized insertion.
 V8_OBJECT class ArrayList
@@ -709,8 +732,10 @@ V8_OBJECT class ArrayList
       AllocationType allocation = AllocationType::kYoung);
 
  public:
-  uint32_t capacity_;
+  V8_TQ_CONST uint32_t capacity_;
   uint32_t length_;
+  V8_TQ_TAIL_NAME(objects);
+  V8_TQ_TAIL_LENGTH(capacity);
   FLEXIBLE_ARRAY_MEMBER(TaggedMember<Object>, objects);
 } V8_OBJECT_END;
 

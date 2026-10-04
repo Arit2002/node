@@ -22,6 +22,7 @@
 #include "src/wasm/wasm-serialization.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/heap/heap-utils.h"
+#include "test/common/version-utils.h"
 #include "test/common/wasm/flag-utils.h"
 #include "test/common/wasm/test-signatures.h"
 #include "test/common/wasm/wasm-macro-gen.h"
@@ -32,9 +33,11 @@ namespace v8::internal::wasm {
 // Approximate gtest TEST_F style, in case we adopt gtest.
 class WasmSerializationTest {
  public:
-  WasmSerializationTest() : zone_(&allocator_, ZONE_NAME) {
+  explicit WasmSerializationTest(
+      const char* embedder_string = Version::GetEmbedder())
+      : zone_(&allocator_, ZONE_NAME) {
     // Don't call here if we move to gtest.
-    SetUp();
+    SetUp(embedder_string);
   }
 
   static constexpr const char* kFunctionName = "increment";
@@ -86,7 +89,7 @@ class WasmSerializationTest {
     CHECK(Deserialize().ToHandle(&module_object));
     {
       DisallowGarbageCollection assume_no_gc;
-      Managed<wasm::NativeModule>::Ptr native_module =
+      CppGCManaged<wasm::NativeModule>::Ptr native_module =
           module_object->native_module();
       base::Vector<const uint8_t> deserialized_module_wire_bytes =
           native_module->wire_bytes();
@@ -121,7 +124,7 @@ class WasmSerializationTest {
  private:
   Zone* zone() { return &zone_; }
 
-  void SetUp() {
+  void SetUp(const char* embedder_string) {
     CcTest::InitIsolateOnce();
     ZoneBuffer buffer(&zone_);
     WasmSerializationTest::BuildWireBytes(zone(), &buffer);
@@ -180,6 +183,7 @@ class WasmSerializationTest {
       while (data_.size == 0) {
         testing::CallWasmFunctionForTesting(serialization_isolate, instance,
                                             kFunctionName, {});
+        ScopedVersionEmbedderString embedder(embedder_string);
         data_ = compiled_module.Serialize();
       }
       CHECK_LT(0, data_.size);
@@ -246,6 +250,32 @@ TEST(DeserializeMismatchingVersion) {
   test.CollectGarbage();
 }
 
+TEST(DeserializeEmbedderString) {
+  {
+    WasmSerializationTest test("");
+    {
+      HandleScope scope(CcTest::i_isolate());
+      ScopedVersionEmbedderString embedder("");
+      CHECK(!test.Deserialize().is_null());
+      ScopedVersionEmbedderString mismatching_embedder("-test");
+      CHECK(test.Deserialize().is_null());
+    }
+    test.CollectGarbage();
+  }
+
+  {
+    WasmSerializationTest test("-test");
+    {
+      HandleScope scope(CcTest::i_isolate());
+      ScopedVersionEmbedderString embedder("-test");
+      CHECK(!test.Deserialize().is_null());
+      ScopedVersionEmbedderString mismatching_embedder("-test.2");
+      CHECK(test.Deserialize().is_null());
+    }
+    test.CollectGarbage();
+  }
+}
+
 TEST(DeserializeNoSerializedData) {
   WasmSerializationTest test;
   {
@@ -292,7 +322,7 @@ UNINITIALIZED_TEST(CompiledWasmModulesTransfer) {
   create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
   v8::Isolate* from_isolate = v8::Isolate::New(create_params);
   std::vector<v8::CompiledWasmModule> store;
-  Managed<NativeModule>::Ptr original_native_module;
+  CppGCManaged<NativeModule>::Ptr original_native_module;
   {
     v8::Isolate::Scope isolate_scope(from_isolate);
     v8::HandleScope scope(from_isolate);
@@ -325,7 +355,7 @@ UNINITIALIZED_TEST(CompiledWasmModulesTransfer) {
       CHECK(!transferred_module.IsEmpty());
       DirectHandle<WasmModuleObject> module_object = Cast<WasmModuleObject>(
           v8::Utils::OpenDirectHandle(*transferred_module.ToLocalChecked()));
-      Managed<NativeModule>::Ptr transferred_native_module =
+      CppGCManaged<NativeModule>::Ptr transferred_native_module =
           module_object->native_module();
       CHECK_EQ(original_native_module, transferred_native_module);
     }
@@ -343,7 +373,7 @@ TEST(TierDownAfterDeserialization) {
   DirectHandle<WasmModuleObject> module_object;
   CHECK(test.Deserialize().ToHandle(&module_object));
 
-  Managed<wasm::NativeModule>::Ptr native_module =
+  CppGCManaged<wasm::NativeModule>::Ptr native_module =
       module_object->native_module();
   CHECK_EQ(3, native_module->module()->functions.size());
   WasmCodeRefScope code_ref_scope;
@@ -381,7 +411,7 @@ TEST(SerializeLiftoffModuleFails) {
   DirectHandle<WasmModuleObject> module_object =
       maybe_module_object.ToHandleChecked();
 
-  Managed<wasm::NativeModule>::Ptr native_module =
+  CppGCManaged<wasm::NativeModule>::Ptr native_module =
       module_object->native_module();
   WasmSerializer wasm_serializer(native_module.raw());
   size_t buffer_size = wasm_serializer.GetSerializedNativeModuleSize();
@@ -402,7 +432,7 @@ TEST(SerializeTieringBudget) {
     DirectHandle<WasmModuleObject> module_object;
     CHECK(test.Deserialize().ToHandle(&module_object));
 
-    Managed<wasm::NativeModule>::Ptr native_module =
+    CppGCManaged<wasm::NativeModule>::Ptr native_module =
         module_object->native_module();
     memcpy(native_module->tiering_budget_array(), mock_budget,
            arraysize(mock_budget) * sizeof(uint32_t));
@@ -434,7 +464,7 @@ TEST(SerializeTieringBudget) {
           wire_bytes_copy, compile_imports, {})
           .ToHandle(&module_object));
 
-  Managed<wasm::NativeModule>::Ptr native_module =
+  CppGCManaged<wasm::NativeModule>::Ptr native_module =
       module_object->native_module();
   for (size_t i = 0; i < arraysize(mock_budget); ++i) {
     CHECK_EQ(mock_budget[i], native_module->tiering_budget_array()[i]);
@@ -538,7 +568,7 @@ TEST(DeserializeIndirectCallWithDifferentCanonicalId) {
                             CompileTimeImports{}, &thrower,
                             base::OwnedCopyOf(zone_buffer))
               .ToHandleChecked();
-      Managed<wasm::NativeModule>::Ptr native_module =
+      CppGCManaged<wasm::NativeModule>::Ptr native_module =
           module_object->native_module();
       weak_native_module = native_module.as_shared_ptr();
 
@@ -624,7 +654,7 @@ TEST(DeserializeIndirectCallWithDifferentCanonicalId) {
             .ToHandleChecked();
 
     // Check that the signature ID got canonicalized to index 1.
-    Managed<wasm::NativeModule>::Ptr native_module =
+    CppGCManaged<wasm::NativeModule>::Ptr native_module =
         module_object->native_module();
     const std::vector<CanonicalTypeIndex>& canonical_type_ids =
         native_module->module()->isorecursive_canonical_type_ids;

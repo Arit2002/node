@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "src/base/hashing.h"
 #include "src/common/assert-scope.h"
 #include "src/common/globals.h"
 #include "src/execution/frames.h"
@@ -397,6 +398,9 @@ VisitorId Map::GetVisitorId(Tagged<Map> map) {
     case JS_SPECIAL_API_OBJECT_TYPE:
       return kVisitJSApiObject;
 
+    case CPP_GCMANAGED_BASE_TYPE:
+      return kVisitCppGCManagedBase;
+
     case CPP_HEAP_EXTERNAL_OBJECT_TYPE:
       return kVisitCppHeapExternalObject;
 
@@ -425,6 +429,9 @@ VisitorId Map::GetVisitorId(Tagged<Map> map) {
     case HASH_SEED_WRAPPER_TYPE:
       return kVisitHashSeedWrapper;
 
+    case UNINITIALIZED_HEAP_NUMBER_TYPE:
+      return kVisitUninitializedHeapNumber;
+
     case FOREIGN_TYPE:
       return kVisitForeign;
 
@@ -452,6 +459,7 @@ VisitorId Map::GetVisitorId(Tagged<Map> map) {
     case BREAK_POINT_INFO_TYPE:
     case CLASS_BOILERPLATE_TYPE:
     case CLASS_POSITIONS_TYPE:
+    case DEBUG_SCRIPT_SCOPE_INFO_TYPE:
     case ENUM_CACHE_TYPE:
     case ERROR_STACK_DATA_TYPE:
     case FUNCTION_TEMPLATE_RARE_DATA_TYPE:
@@ -504,6 +512,10 @@ VisitorId Map::GetVisitorId(Tagged<Map> map) {
 #if V8_ENABLE_WEBASSEMBLY
     case WASM_ARRAY_TYPE:
       return kVisitWasmArray;
+    case WASM_CUSTOM_MAP_TYPE:
+      return kVisitWasmCustomMap;
+    case WASM_CUSTOM_MAP_WRAPPER_TYPE:
+      return kVisitJSObject;
     case WASM_FUNC_REF_TYPE:
       return kVisitWasmFuncRef;
     case WASM_GLOBAL_OBJECT_TYPE:
@@ -1004,6 +1016,8 @@ Handle<Map> Map::GetDerivedMap(Isolate* isolate, DirectHandle<Map> from,
     return map;
   }
 
+  if (from->prototype() == *prototype) return handle(*from, isolate);
+
   // The TransitionToPrototype map will not have new_target_is_base reset. But
   // we don't need it to for proxies.
   return Map::TransitionRootMapToPrototypeForNewObject(isolate, from,
@@ -1370,8 +1384,10 @@ Handle<Map> Map::Normalize(Isolate* isolate, DirectHandle<Map> fast_map,
   }
   DirectHandle<NormalizedMapCache> cache;
   if (use_cache) {
+    Tagged<Object> maybe_native_context = meta_map->native_context_or_null();
+    DCHECK(!IsNull(maybe_native_context));
     Tagged<Object> normalized_map_cache =
-        meta_map->native_context()->normalized_map_cache();
+        Cast<NativeContext>(maybe_native_context)->normalized_map_cache();
     use_cache = !IsUndefined(normalized_map_cache);
     if (use_cache) {
       cache = Cast<NormalizedMapCache>(
@@ -2367,8 +2383,8 @@ Handle<Map> Map::CopyReplaceDescriptor(
 }
 
 int Map::Hash(Isolate* isolate, Tagged<HeapObject> prototype) {
-  // For performance reasons we only hash the 2 most variable fields of a map:
-  // prototype and bit_field2.
+  // Hash the prototype, instance type and bit_field2, mixing their bits before
+  // NormalizedMapCache reduces the hash to a cache index.
 
   int prototype_hash;
   if (IsNull(prototype)) {
@@ -2379,7 +2395,10 @@ int Map::Hash(Isolate* isolate, Tagged<HeapObject> prototype) {
     prototype_hash = receiver->GetOrCreateIdentityHash(isolate).value();
   }
 
-  return prototype_hash ^ bit_field2();
+  size_t hash =
+      base::Hasher::Combine(prototype_hash, static_cast<int>(bit_field2()),
+                            static_cast<int>(instance_type()));
+  return static_cast<int>(hash & 0x7FFFFFFF);
 }
 
 namespace {
@@ -2666,6 +2685,11 @@ void Map::SetPrototype(Isolate* isolate, DirectHandle<Map> map,
            HeapLayout::InWritableSharedSpace(*prototype));
   }
 
+  if (IsJSInterceptorMap(*map) && map->prototype() != *prototype) {
+    Cast<JSInterceptorMap>(*map)->set_fast_case_validity_cell(
+        ReadOnlyRoots(isolate).invalid_prototype_validity_cell());
+  }
+
   WriteBarrierMode wb_mode =
       IsNull(*prototype) ? SKIP_WRITE_BARRIER : UPDATE_WRITE_BARRIER;
   map->set_prototype(*prototype, wb_mode);
@@ -2681,6 +2705,7 @@ Handle<Map> Map::TransitionRootMapToPrototypeForNewObject(
     Isolate* isolate, DirectHandle<Map> map,
     DirectHandle<JSPrototype> prototype) {
   DCHECK(IsUndefined(map->GetBackPointer()));
+  DCHECK_NE(map->prototype(), *prototype);
   Handle<Map> new_map = TransitionToUpdatePrototype(isolate, map, prototype);
   if (new_map->GetBackPointer() != *map &&
       map->IsInobjectSlackTrackingInProgress()) {
@@ -2696,6 +2721,7 @@ Handle<Map> Map::TransitionToUpdatePrototype(
     DirectHandle<JSPrototype> prototype) {
   Handle<Map> new_map;
   DCHECK(IsUndefined(map->GetBackPointer()));
+  DCHECK_NE(map->prototype(), *prototype);
   if (auto maybe_map = TransitionsAccessor::GetPrototypeTransition(
           isolate, *map, *prototype)) {
     new_map = handle(*maybe_map, isolate);

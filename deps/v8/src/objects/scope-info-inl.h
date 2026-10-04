@@ -68,19 +68,19 @@ void ScopeInfo::set_context_local_count(int value) {
 }
 
 int ScopeInfo::position_info_start() const {
-  return position_info_start_.load().value();
+  return position_info_.start_.load().value();
 }
 
 void ScopeInfo::set_position_info_start(int value) {
-  position_info_start_.store(this, Smi::FromInt(value));
+  position_info_.start_.store(this, Smi::FromInt(value));
 }
 
 int ScopeInfo::position_info_end() const {
-  return position_info_end_.load().value();
+  return position_info_.end_.load().value();
 }
 
 void ScopeInfo::set_position_info_end(int value) {
-  position_info_end_.store(this, Smi::FromInt(value));
+  position_info_.end_.store(this, Smi::FromInt(value));
 }
 
 // -----------------------------------------------------------------------
@@ -149,11 +149,16 @@ int ScopeInfo::ModuleVariablesOffset() const {
   return ModuleInfoOffset() + (is_module ? kTaggedSize : 0);
 }
 
-int ScopeInfo::DependentCodeOffset() const {
+int ScopeInfo::ModuleVariablesHashtableOffset() const {
   const bool is_module =
       ScopeTypeBits::decode(Flags()) == ScopeType::MODULE_SCOPE;
   const int mod_var_count = is_module ? module_variable_count() : 0;
   return ModuleVariablesOffset() + mod_var_count * sizeof(ModuleVariableInfo);
+}
+
+int ScopeInfo::DependentCodeOffset() const {
+  return ModuleVariablesHashtableOffset() +
+         (HasModuleVariablesHashtable() ? kTaggedSize : 0);
 }
 
 int ScopeInfo::UnusedParameterBitsOffset() const {
@@ -384,6 +389,26 @@ void ScopeInfo::set_module_variables_properties(int i, int value) {
       ModuleVariablesOffset() + i * sizeof(ModuleVariableInfo) +
       offsetof(ModuleVariableInfo, properties));
   data()[slot].store(this, Smi::From31BitPattern(value));
+}
+
+bool ScopeInfo::HasModuleVariablesHashtable() const {
+  return ScopeTypeBits::decode(Flags()) == ScopeType::MODULE_SCOPE &&
+         module_variable_count() >= kScopeInfoMaxInlinedLocalNamesSize;
+}
+
+Tagged<NameToIndexHashTable> ScopeInfo::module_variables_hashtable() const {
+  DCHECK(HasModuleVariablesHashtable());
+  const int slot =
+      scope_info_internal::DataSlotIndex(ModuleVariablesHashtableOffset());
+  return Cast<NameToIndexHashTable>(data()[slot].load());
+}
+
+void ScopeInfo::set_module_variables_hashtable(
+    Tagged<NameToIndexHashTable> value, WriteBarrierMode mode) {
+  DCHECK(HasModuleVariablesHashtable());
+  const int slot =
+      scope_info_internal::DataSlotIndex(ModuleVariablesHashtableOffset());
+  data()[slot].store(this, value, mode);
 }
 
 Tagged<DependentCode> ScopeInfo::dependent_code() const {

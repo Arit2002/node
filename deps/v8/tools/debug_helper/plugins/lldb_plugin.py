@@ -507,15 +507,33 @@ def cmd_v8(debugger, command, result, _internal_dict):
 
     - inspect -- Inspect the heap object at <addr> with the V8 inspector.
 
-      v8 inspect <addr> [--type T] [--depth N] [--array-length N]
+      v8 inspect <addr>|this|[N] [--type T] [--depth N] [--array-length N]
 
+      * this / [N]: inspect the receiver or the Nth argument of the
+        selected JS frame instead of a raw address.
       * --type T: treat the object as if it has type T (e.g. `v8::internal::JSArray`).
       * --depth N: limit recursive inspection depth to N (default: 1).
       * --array-length N: for arrays, inspect up to N elements (default: 16).
 
+    - args -- Print the receiver and the arguments of a JS frame.
+
+      v8 args [frame#]
+
+      * frame#: the frame to show (default: the selected frame).
+
     - isolate -- Print the current Isolate address of the selected thread.
 
       v8 isolate
+
+    - source -- Print the source span of the function a JS frame is running.
+
+      v8 source [frame#] [--max-lines N]
+
+      * frame#: the frame to show (default: the selected frame).
+      * --max-lines N: cap the number of span lines shown (default: 10).
+
+      The span covers the whole function; the exact executing line is not
+      recovered.
   """
   try:
     argv = shlex.split(command or "")
@@ -523,6 +541,7 @@ def cmd_v8(debugger, command, result, _internal_dict):
     argv = (command or "").split()
   target = debugger.GetSelectedTarget()
   process = target.GetProcess() if target else None
+  thread = None
   frame = None
   if process:
     thread = process.GetSelectedThread()
@@ -539,6 +558,22 @@ def cmd_v8(debugger, command, result, _internal_dict):
   def eval_address(text):
     return _evaluate_address_in_lldb(target, frame, text)
 
+  def frame_fp(index):
+    if not thread or not thread.IsValid():
+      return None
+    if index is None:
+      selected = thread.GetSelectedFrame()
+    elif index < thread.GetNumFrames():
+      selected = thread.GetFrameAtIndex(index)
+    else:
+      return None
+    if not selected or not selected.IsValid():
+      return None
+    fp = selected.GetFP()
+    if not fp or fp == lldb.LLDB_INVALID_ADDRESS:
+      return None
+    return (selected.GetFrameID(), fp)
+
   ok, text = dispatch_v8_command(
       bridge,
       argv,
@@ -546,6 +581,7 @@ def cmd_v8(debugger, command, result, _internal_dict):
       eval_address=eval_address,
       resolver=_LldbResolver(target, process),
       verbose=_VERBOSE,
+      frame_fp=frame_fp,
   )
   if not ok:
     result.SetError(text)

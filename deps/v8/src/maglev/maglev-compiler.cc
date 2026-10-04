@@ -181,7 +181,7 @@ bool MaglevCompiler::Compile(LocalIsolate* local_isolate,
       TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("v8.compile"),
                   "V8.Maglev.Truncation");
       SYNCHRONIZATION_POINT("MaglevTruncation");
-      GraphBackwardProcessor<PropagateTruncationProcessor> propagate;
+      GraphBackwardProcessor<PropagateTruncationProcessor> propagate(graph);
       propagate.ProcessGraph(graph);
       PrintGraph(graph, v8_flags.print_maglev_graphs,
                  MaglevPhase::kTruncationPropagation);
@@ -299,6 +299,9 @@ bool MaglevCompiler::Compile(LocalIsolate* local_isolate,
         std::make_unique<MaglevCodeGenerator>(local_isolate, compilation_info,
                                               graph);
     bool success = code_generator->Assemble();
+    if (v8_flags.maglev_build_code_on_background || !success) {
+      compilation_info->broker()->DetachCanonicalHandles(compilation_info);
+    }
     if (!success) {
       return false;
     }

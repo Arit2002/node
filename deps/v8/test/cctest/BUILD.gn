@@ -99,6 +99,7 @@ v8_cluster_source_set("cctest_sources") {
     "../common/node-observer-tester.h",
     "../common/value-helper.cc",
     "../common/value-helper.h",
+    "../common/version-utils.h",
     "cctest-utils.h",
     "collector.h",
     "expression-type-collector-macros.h",
@@ -114,6 +115,7 @@ v8_cluster_source_set("cctest_sources") {
     "heap/test-external-string-tracker.cc",
     "heap/test-heap.cc",
     "heap/test-incremental-marking.cc",
+    "heap/test-limit-based-memory-reducer.cc",
     "heap/test-mark-compact.cc",
     "heap/test-memory-measurement.cc",
     "heap/test-pool.cc",
@@ -147,7 +149,6 @@ v8_cluster_source_set("cctest_sources") {
     "test-icache.cc",
     "test-inobject-slack-tracking.cc",
     "test-js-weak-refs.cc",
-    "test-liveedit.cc",
     "test-lockers.cc",
     "test-mementos.cc",
     "test-orderedhashtable.cc",
@@ -281,6 +282,7 @@ v8_cluster_source_set("cctest_sources") {
 
       # test-run-native-calls uses wasm's LinkageAllocator.
       "compiler/test-run-native-calls.cc",
+      "compiler/turboshaft-test-simd-shift.cc",
       "test-js-to-wasm.cc",
       "wasm/test-backing-store.cc",
       "wasm/test-c-wasm-entry.cc",

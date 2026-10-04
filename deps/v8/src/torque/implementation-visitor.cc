@@ -1827,6 +1827,12 @@ void ImplementationVisitor::GenerateImplementation(const std::string& dir) {
       CHECK_NE(pos, std::string::npos);
       std::string includes;
       for (const SourceId& include : streams.required_builtin_includes) {
+        // A field built from the layout JSON is positioned at the C++
+        // header that declares it, which has no generated counterpart to
+        // include.
+        if (!StringEndsWith(SourceFileMap::PathFromV8Root(include), ".tq")) {
+          continue;
+        }
         std::string include_file =
             SourceFileMap::PathFromV8RootWithoutExtension(include);
         includes += "#include \"torque-generated/";
@@ -2728,15 +2734,21 @@ std::pair<std::string, std::string> GetClassInstanceTypeRange(
     const ClassType* class_type) {
   std::pair<std::string, std::string> result;
   if (class_type->InstanceTypeRange()) {
-    auto instance_type_range = *class_type->InstanceTypeRange();
-    std::string instance_type_string_first =
-        "static_cast<InstanceType>(" +
-        std::to_string(instance_type_range.first) + ")";
-    std::string instance_type_string_second =
-        "static_cast<InstanceType>(" +
-        std::to_string(instance_type_range.second) + ")";
+    // Emit the named FIRST_/LAST_ range markers rather than the integer
+    // literals Torque computed at codegen time. After the metagen cutover
+    // the IT values come from tools/metagen/, not from Torque, so any
+    // literal here would be stale. Always use the range form, never the
+    // bare _TYPE symbol: whether a class covers one instance type or a
+    // range is also metagen's call (its C++-derived hierarchy can have
+    // subclasses Torque doesn't know about), and DownCastForTorqueClass
+    // decides equality-check vs range-check from these constants at C++
+    // compile time. Both generators emit FIRST_/LAST_ markers for every
+    // class, aliasing the sole value for single-instance-type classes.
+    const std::string type_name =
+        CapifyStringWithUnderscores(class_type->name()) + "_TYPE";
     result =
-        std::make_pair(instance_type_string_first, instance_type_string_second);
+        std::make_pair("static_cast<InstanceType>(FIRST_" + type_name + ")",
+                       "static_cast<InstanceType>(LAST_" + type_name + ")");
   } else {
     ReportError(
         "%Min/MaxInstanceType must take a class type that is either a string "

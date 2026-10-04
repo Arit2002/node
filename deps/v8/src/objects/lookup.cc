@@ -23,6 +23,7 @@
 #include "src/objects/js-shared-array.h"
 #include "src/objects/js-struct.h"
 #include "src/objects/map-updater.h"
+#include "src/objects/object-conversions-inl.h"
 #include "src/objects/ordered-hash-table.h"
 #include "src/objects/property-details.h"
 #include "src/objects/struct-inl.h"
@@ -667,13 +668,16 @@ void LookupIterator::ReconfigureDataProperty(DirectHandle<Object> value,
 void LookupIterator::PrepareTransitionToDataProperty(
     DirectHandle<JSTransitionableReceiver> receiver, DirectHandle<Object> value,
     PropertyAttributes attributes, StoreOrigin store_origin) {
-  DCHECK_IMPLIES(IsJSProxy(*receiver), name()->IsAnyPrivate());
+  DCHECK_IMPLIES(IsJSProxy(*receiver), name_for_transition()->IsAnyPrivate());
   DCHECK_IMPLIES(!receiver.is_identical_to(GetStoreTarget<JSReceiver>()),
-                 name()->IsAnyPrivateName());
+                 name_for_transition()->IsAnyPrivateName());
   DCHECK(!IsAlwaysSharedSpaceJSObject(*receiver));
+#if V8_ENABLE_WEBASSEMBLY
+  DCHECK(!IsWasmObject(*receiver));
+#endif
   if (state_ == TRANSITION) return;
 
-  if (!IsElement() && name()->IsAnyPrivate()) {
+  if (!IsElement() && name_for_transition()->IsAnyPrivate()) {
     attributes = static_cast<PropertyAttributes>(attributes | DONT_ENUM);
   }
 
@@ -696,7 +700,7 @@ void LookupIterator::PrepareTransitionToDataProperty(
           PropertyDetails(PropertyKind::kData, attributes,
                           PropertyCell::InitialType(isolate_, *value));
       transition_ = isolate_->factory()->NewPropertyCell(
-          name(), property_details_, value);
+          name_for_transition(), property_details_, value);
       has_property_ = true;
     } else {
       // Don't set enumeration index (it will be set during value store).
@@ -708,9 +712,9 @@ void LookupIterator::PrepareTransitionToDataProperty(
     return;
   }
 
-  DirectHandle<Map> transition =
-      Map::TransitionToDataProperty(isolate_, map, name_, value, attributes,
-                                    PropertyConstness::kConst, store_origin);
+  DirectHandle<Map> transition = Map::TransitionToDataProperty(
+      isolate_, map, name_for_transition(), value, attributes,
+      PropertyConstness::kConst, store_origin);
   state_ = TRANSITION;
   transition_ = transition;
 
@@ -1053,13 +1057,12 @@ bool LookupIterator::CanStayConst(Tagged<Object> value) const {
       FieldIndex::ForDetails(holder->map(), property_details_);
   if (property_details_.representation().IsDouble()) {
     if (!IsNumber(value)) return false;
-    // Attempt to store HeapNumber with the hole NaN pattern should have
-    // already generalized field constness to kMutable.
-    DCHECK_IMPLIES(!IsSmi(value), !Cast<HeapNumber>(value)->is_the_hole());
     Tagged<Object> current_value = holder->RawFastPropertyAt(field_index);
+    // Only allow initializing stores to uninitialized heap numbers
+    // to stay constant.
+    if (IsUninitializedHeapNumber(current_value)) return true;
     DCHECK(IsHeapNumber(current_value));
-    // Only allow initializing stores to double to stay constant.
-    return Cast<HeapNumber>(current_value)->is_the_hole();
+    return false;
   }
 
   Tagged<Object> current_value = holder->RawFastPropertyAt(field_index);
@@ -1202,8 +1205,8 @@ void LookupIterator::WriteDataValue(DirectHandle<Object> value,
       DCHECK_IMPLIES(!initializing_store && property_details_.constness() ==
                                                  PropertyConstness::kConst,
                      CanStayConst(*value));
-      Cast<JSObject>(*holder)->WriteToField(descriptor_number(),
-                                            property_details_, *value);
+      Cast<JSObject>(*holder)->WriteToField(
+          descriptor_number(), property_details_, *value, initializing_store);
     } else {
       DCHECK_EQ(PropertyLocation::kDescriptor, property_details_.location());
       DCHECK_EQ(PropertyConstness::kConst, property_details_.constness());

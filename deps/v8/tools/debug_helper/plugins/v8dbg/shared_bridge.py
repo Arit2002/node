@@ -13,11 +13,13 @@ import re
 import types
 from typing import Optional
 
+from .format import format_frame_location, format_frame_trailer
 from .inspect import (
+    PROPERTY_KIND_ARRAY_OF_KNOWN_SIZE,
     decode_c_str,
     decode_tagged_smi,
     extract_brief_address,
-    read_frame_trailer,
+    preview_tagged_slot,
     summarize_property,
 )
 from .models import HeapHints, InspectResult
@@ -29,6 +31,11 @@ _STRING_LITERAL_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
 
 # Default per-field string length cap for frame annotations. Use None if unlimited.
 _MAX_PROP_STRING_CHARS = 256
+
+# Cap on per-argument previews in backtrace annotations, to limit the
+# annotation length and the per-frame debug-helper calls on deep stacks.
+# `v8 args` shows the full list.
+_MAX_BT_ARG_PREVIEWS = 4
 
 
 class StructProperty(ctypes.Structure):
@@ -301,40 +308,68 @@ class DebuggerBridge:
         char_offset + 1 if last_newline == -1 else char_offset - last_newline)
     return (line, column)
 
-  def _decode_position(self, script_source, function_name, offset_prop,
-                       read_memory):
-    """Decode function_character_offset into a (line, column) pair."""
+  def _decode_span(self, script_source, function_name, offset_prop,
+                   read_memory):
+    """Decode function_character_offset into (start, end) (line, column) pairs.
+
+    The end pair points at the last character of the function. Either pair
+    can be None when it cannot be recovered.
+    """
     if (offset_prop is None or not offset_prop.address or
         not offset_prop.struct_fields):
-      return None
+      return (None, None)
 
     fields = {f.name: f for f in offset_prop.struct_fields}
     start_field = fields.get("start")
     end_field = fields.get("end")
     if start_field is None or end_field is None:
-      return None
+      return (None, None)
 
     # The debug helper reports the total struct size as 2 * kTaggedSize for the
     # target build, so derive the per-field width from that build-specific size.
     if start_field.offset != 0 or offset_prop.size % 2 != 0:
-      return None
+      return (None, None)
     field_width = offset_prop.size // 2
     if field_width not in (4, 8):
-      return None
-    raw_start = int.from_bytes(
-        read_memory(offset_prop.address + start_field.offset, field_width),
-        byteorder="little",
-        signed=False,
-    )
-    char_offset = decode_tagged_smi(raw_start, field_width)
-    position = self._position_from_offset(script_source, char_offset)
-    if position is not None:
-      return position
+      return (None, None)
 
-    # Top-level scripts without source can still be reported as 1:1.
-    if not script_source and char_offset == 0 and function_name == "":
-      return (1, 1)
-    return None
+    def read_char_offset(byte_offset):
+      raw = int.from_bytes(
+          read_memory(offset_prop.address + byte_offset, field_width),
+          byteorder="little",
+          signed=False,
+      )
+      return decode_tagged_smi(raw, field_width)
+
+    start_offset = read_char_offset(0)
+    position = self._position_from_offset(script_source, start_offset)
+    if position is None:
+      # Top-level scripts without source can still be reported as 1:1.
+      if not script_source and start_offset == 0 and function_name == "":
+        return ((1, 1), None)
+      return (None, None)
+
+    # The end offset points one past the last character of the function.
+    # Like the struct size, the reported field offsets assume pointer
+    # compression (end is always at 4), so place the end field at the
+    # build-specific field width instead.
+    end_offset = read_char_offset(field_width)
+    end_position = None
+    if end_offset > start_offset:
+      end_position = self._position_from_offset(script_source, end_offset - 1)
+    return (position, end_position)
+
+  def _read_slot_value(self, prop, read_memory):
+    """Read the raw value stored in a single-slot frame property, or None."""
+    if prop is None or not prop.address or not prop.size:
+      return None
+    try:
+      data = read_memory(prop.address, prop.size)
+    except Exception:
+      return None
+    if len(data) != prop.size:
+      return None
+    return int.from_bytes(data, "little", signed=False)
 
   def describe_js_frame(self, frame_pointer, read_memory):
     """Return high-level JS frame metadata, or None if the frame is unusable."""
@@ -367,7 +402,7 @@ class DebuggerBridge:
           read_memory,
           allow_brief_fallback=False,
           max_chars=None)
-      position = self._decode_position(
+      position, end_position = self._decode_span(
           script_source,
           function_name,
           props.get("function_character_offset"),
@@ -378,44 +413,68 @@ class DebuggerBridge:
         return None
       if function_name == "":
         function_name = "<anonymous>"
+
+      # argc is None when the argument count cannot be recovered. In that case,
+      # the arguments property uses the array-of-unknown-size kind.
+      arguments = props.get("arguments")
+      argc = None
+      if (arguments is not None and
+          arguments.kind == PROPERTY_KIND_ARRAY_OF_KNOWN_SIZE):
+        argc = arguments.num_values
       return {
           "function_name": function_name,
           "script_name": script_name,
           "position": position,
+          "end_position": end_position,
+          "script_source": script_source,
+          "receiver": self._read_slot_value(props.get("receiver"), read_memory),
+          "argc": argc,
+          "arguments": arguments,
       }
     finally:
       library._v8_debug_helper_Free_StackFrameResult(result_ptr)
 
+  def argument_previews(self, annotation, read_memory, cap=None, hints=None):
+    """Render compact per-argument previews for a describe_js_frame result.
+
+    Returns a list of at most `cap` briefs, or None when the argument slots
+    cannot be read.
+    """
+    arguments = annotation.get("arguments")
+    argc = annotation.get("argc")
+    if arguments is None or argc is None:
+      return None
+    count = argc if cap is None else min(argc, cap)
+    return [
+        preview_tagged_slot(self, read_memory,
+                            arguments.address + i * arguments.size,
+                            arguments.size, hints) for i in range(count)
+    ]
+
   def frame_suffix(self, frame_pointer, read_memory):
     """Format the JS annotation suffix for a debugger frame:
 
-    [<function_name> @ <script_name>:<line>:<column>] (this=0x..., argc=N)
+    [<function_name> @ <script_name>:<line>:<column>] (this=..., [0]=..., ...)
 
     If source text cannot be recovered but the script name still can, the
     annotation degrades to:
 
     [<function_name> @ <script_name>]
 
-    Drops the trailing `(this=..., argc=...)` if the frame slots are unreadable.
+    Argument previews are capped, so a longer frame gets a "... (argc=N)"
+    tail. When the argument count cannot be recovered, the trailer is
+    `(this=..., argc=?)`. It is dropped when the receiver slot is unreadable
+    too.
     """
     annotation = self.describe_js_frame(frame_pointer, read_memory)
     if not annotation:
       return ""
-    function_name = annotation.get("function_name") or "<anonymous>"
-    script_name = annotation.get("script_name")
-    position = annotation.get("position")
-    location_suffix = ""
-    if position:
-      location_suffix = f":{position[0]}:{position[1]}"
-    if script_name:
-      head = f" [{function_name} @ {script_name}{location_suffix}]"
-    else:
-      head = f" [{function_name}]"
-    receiver, argc = read_frame_trailer(frame_pointer, self._ptr_size,
-                                        read_memory)
-    if receiver is None:
-      return head
-    return f"{head} (this=0x{receiver:x}, argc={argc})"
+    previews = self.argument_previews(
+        annotation, read_memory, cap=_MAX_BT_ARG_PREVIEWS)
+    location = format_frame_location(annotation)
+    trailer = format_frame_trailer(annotation["receiver"], annotation["argc"],
+                                   previews)
+    return f" [{location}]{trailer}"
 
 
 _bridges = {}

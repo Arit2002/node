@@ -83,7 +83,8 @@ void HeapObject::set_map(IsolateT* isolate, Tagged<Map> value,
 #if V8_ENABLE_WEBASSEMBLY
   // In {WasmGraphBuilder::SetMap} and {WasmGraphBuilder::LoadMap}, we treat
   // maps as immutable. Therefore we are not allowed to mutate them here.
-  DCHECK(!IsWasmStructMap(value) && !IsWasmArrayMap(value));
+  DCHECK(!IsWasmStructMap(value) && !IsWasmArrayMap(value) &&
+         !IsWasmCustomMapMap(value));
 #endif
   if (v8_flags.verify_heap) {
     if (mode == VerificationMode::kSafeMapTransition) {
@@ -108,6 +109,45 @@ void HeapObject::set_map(IsolateT* isolate, Tagged<Map> value,
 #endif
   }
 #endif
+}
+
+// static
+WriteBarrierMode AllocationWitness::WriteBarrierModeForAllocation(
+    Tagged<HeapObject> object, AllocationType allocation) {
+  if (v8_flags.disable_write_barriers) return SKIP_WRITE_BARRIER;
+  if (allocation == AllocationType::kReadOnly) return SKIP_WRITE_BARRIER;
+  if (allocation == AllocationType::kYoung &&
+      !v8_flags.single_generation.value()) {
+#if V8_VERIFY_WRITE_BARRIERS
+    DCHECK(WriteBarrier::IsMostRecentYoungAllocation(object.address()));
+#endif
+    return SKIP_WRITE_BARRIER;
+  }
+  return UPDATE_WRITE_BARRIER;
+}
+
+AllocationWitness::AllocationWitness(Tagged<HeapObject> object,
+                                     AllocationType allocation)
+    : AllocationWitness(object,
+                        WriteBarrierModeForAllocation(object, allocation)) {}
+
+AllocationWitness::AllocationWitness(Tagged<HeapObject> object,
+                                     WriteBarrierMode write_barrier_mode)
+    : object_(object), write_barrier_mode_(write_barrier_mode) {}
+
+HeapObject::HeapObject(const AllocationWitness& witness,
+                       Tagged<ReadOnly<Map>> map)
+    : HeapObject(witness, map, SKIP_WRITE_BARRIER) {}
+
+HeapObject::HeapObject(const AllocationWitness& witness, Tagged<Map> map)
+    : HeapObject(witness, map, witness.write_barrier_mode()) {}
+
+HeapObject::HeapObject(const AllocationWitness& witness, Tagged<Map> map,
+                       WriteBarrierMode write_barrier_mode) {
+  DCHECK_EQ(witness.object(), this);
+  DCHECK(!map.is_null());
+  set_map_after_allocation(static_cast<Isolate*>(nullptr), map,
+                           write_barrier_mode);
 }
 
 template <typename IsolateT>

@@ -82,6 +82,8 @@ V8_EXPORT_PRIVATE std::ostream& operator<<(std::ostream& os,
 // The Name abstract class captures anything that can be used as a property
 // name, i.e., strings and symbols.  All names store a hash value.
 V8_OBJECT class Name : public PrimitiveHeapObject {
+  V8_IT_ABSTRACT;
+
  public:
   // Tells whether the hash code has been computed.
   // Note: Use TryGetHash() whenever you want to use the hash, instead of a
@@ -304,7 +306,7 @@ V8_OBJECT class Name : public PrimitiveHeapObject {
 
   inline uint32_t GetRawHashFromForwardingTable(uint32_t raw_hash) const;
 
-  std::atomic_uint32_t raw_hash_field_;
+  std::atomic_uint32_t raw_hash_field_ V8_TQ_TYPE(NameHash);
 } V8_OBJECT_END;
 
 inline bool IsUniqueName(Tagged<Name> obj);
@@ -380,10 +382,10 @@ V8_OBJECT class Symbol : public Name {
 
   const char* PrivateSymbolToName() const;
 
-  uint32_t flags_;
+  uint32_t flags_ V8_TQ_TYPE(SymbolFlags);
   // String|Undefined
   // TODO(leszeks): Introduce a union type for this.
-  TaggedMember<PrimitiveHeapObject> description_;
+  TaggedMember<PrimitiveHeapObject> description_ V8_TQ_TYPE(String | Undefined);
 } V8_OBJECT_END;
 
 template <>

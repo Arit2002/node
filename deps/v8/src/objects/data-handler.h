@@ -16,6 +16,8 @@ namespace internal {
 // DataHandler is a base class for load and store handlers that can't be
 // encoded in one Smi. Kind of a handler can be deduced from instance type.
 V8_OBJECT class DataHandler : public Struct {
+  V8_IT_ABSTRACT;
+
  public:
   static constexpr int OffsetOf(int index);
   static constexpr int SizeFor(int count);
@@ -63,6 +65,7 @@ V8_OBJECT class DataHandler : public Struct {
  public:
   TaggedMember<UnionOf<Smi, Code>> smi_handler_;
   TaggedMember<UnionOf<Smi, Cell>> validity_cell_;
+  V8_TQ_NO_TAIL;
   FLEXIBLE_ARRAY_MEMBER(TaggedMember<MaybeObject>, data);
 
  private:

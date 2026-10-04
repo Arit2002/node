@@ -27,8 +27,12 @@ class BreakPoint;
 class BreakPointInfo;
 class StackFrameInfo;
 class StackTraceInfo;
+class DebugScriptScopeInfo;
 class BytecodeArray;
+struct SourceRange;
 class StructBodyDescriptor;
+template <typename T>
+class ZoneVector;
 
 // The DebugInfo class holds additional information for a function being
 // debugged.
@@ -199,12 +203,14 @@ V8_OBJECT class DebugInfo : public ExposedTrustedObject {
 
  public:
   TaggedMember<SharedFunctionInfo> shared_;
-  TaggedMember<Smi> debugger_hints_;
+  TaggedMember<Smi> debugger_hints_ V8_TQ_TYPE(SmiTagged<DebuggerHints>);
   TaggedMember<FixedArray> break_points_;
-  TaggedMember<Smi> flags_;
+  V8_TQ_RELAXED TaggedMember<Smi> flags_ V8_TQ_TYPE(SmiTagged<DebugInfoFlags>);
   TaggedMember<UnionOf<CoverageInfo, Undefined>> coverage_info_;
-  ProtectedTaggedMember<UnionOf<BytecodeArray, Zero>> original_bytecode_array_;
-  ProtectedTaggedMember<UnionOf<BytecodeArray, Zero>> debug_bytecode_array_;
+  ProtectedTaggedMember<UnionOf<BytecodeArray, Zero>> original_bytecode_array_
+      V8_TQ_TYPE(ProtectedPointer<BytecodeArray>);
+  ProtectedTaggedMember<UnionOf<BytecodeArray, Zero>> debug_bytecode_array_
+      V8_TQ_TYPE(ProtectedPointer<BytecodeArray>);
 } V8_OBJECT_END;
 
 // The BreakPointInfo class holds information for break points set in a
@@ -251,10 +257,10 @@ V8_OBJECT class BreakPointInfo : public Struct {
 
 // Layout of a single slot within CoverageInfo.
 struct CoverageInfoSlot {
-  int32_t start_source_position;
-  int32_t end_source_position;
-  int32_t block_count;
-  int32_t padding;
+  const int32_t start_source_position;
+  const int32_t end_source_position;
+  int32_t block_count = 0;
+  const int32_t padding = 0;
 
   static const int kSize;
 };
@@ -265,19 +271,17 @@ inline constexpr int CoverageInfoSlot::kSize = sizeof(CoverageInfoSlot);
 // Holds information related to block code coverage.
 V8_OBJECT class CoverageInfo : public HeapObject {
  public:
+  CoverageInfo(const AllocationWitness& witness, ReadOnlyRoots roots,
+               const ZoneVector<SourceRange>& slots);
+
   inline int32_t slot_count() const;
-  inline void set_slot_count(int32_t value);
 
   inline int32_t slots_start_source_position(int i) const;
-  inline void set_slots_start_source_position(int i, int32_t value);
   inline int32_t slots_end_source_position(int i) const;
-  inline void set_slots_end_source_position(int i, int32_t value);
   inline int32_t slots_block_count(int i) const;
   inline void set_slots_block_count(int i, int32_t value);
   inline int32_t slots_padding(int i) const;
-  inline void set_slots_padding(int i, int32_t value);
 
-  void InitializeSlot(int slot_index, int start_pos, int end_pos);
   void ResetBlockCount(int slot_index);
 
   // Computes the size for a CoverageInfo instance of a given length.
@@ -295,7 +299,9 @@ V8_OBJECT class CoverageInfo : public HeapObject {
   // Description of layout within each slot.
   using Slot = CoverageInfoSlot;
 
-  int32_t slot_count_;
+  V8_TQ_CONST const int32_t slot_count_;
+  V8_TQ_TAIL_NAME(slots);
+  V8_TQ_TAIL_LENGTH(slot_count);
   FLEXIBLE_ARRAY_MEMBER(CoverageInfoSlot, slots);
 } V8_OBJECT_END;
 
@@ -362,7 +368,7 @@ V8_OBJECT class StackFrameInfo : public Struct {
 
   TaggedMember<UnionOf<SharedFunctionInfo, Script>> shared_or_script_;
   TaggedMember<String> function_name_;
-  TaggedMember<Smi> flags_;
+  TaggedMember<Smi> flags_ V8_TQ_TYPE(SmiTagged<StackFrameInfoFlags>);
   TaggedMember<Smi> bytecode_offset_or_source_position_;
 #if V8_ENABLE_WEBASSEMBLY
   // Wasm wire byte offsets are 0-indexed instruction positions within a module
@@ -427,6 +433,31 @@ V8_OBJECT class ErrorStackData : public Struct {
   TaggedMember<UnionOf<FixedArray, JSAny>>
       raw_data_for_call_site_infos_or_formatted_stack_;
   TaggedMember<StackTraceInfo> stack_trace_;
+} V8_OBJECT_END;
+
+// DebugScriptScopeInfo holds the serialized scope tree of a Script for the
+// debugger. It caches lexical scope information (scopes, variables, positions)
+// to avoid reparsing the script on every pause or inspection step.
+//
+// The exact encoding of the data in `numeric_data` is described in
+// src/debug/debug-scope-info.cc.
+V8_OBJECT class DebugScriptScopeInfo : public Struct {
+ public:
+  inline DebugScriptScopeInfo(const AllocationWitness& witness,
+                              ReadOnlyRoots roots,
+                              Tagged<ByteArray> numeric_data,
+                              Tagged<FixedArray> string_table);
+
+  inline Tagged<ByteArray> numeric_data() const;
+  inline Tagged<FixedArray> string_table() const;
+
+  DECL_VERIFIER(DebugScriptScopeInfo)
+  DECL_PRINTER(DebugScriptScopeInfo)
+
+  using BodyDescriptor = StructBodyDescriptor;
+
+  const TaggedMember<ByteArray> numeric_data_;
+  const TaggedMember<FixedArray> string_table_;
 } V8_OBJECT_END;
 
 }  // namespace internal

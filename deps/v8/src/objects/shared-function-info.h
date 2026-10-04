@@ -78,11 +78,12 @@ using CreateSourcePositions =
 // +-------------------------------+
 V8_OBJECT class PreparseData : public HeapObject {
  public:
+  inline PreparseData(const AllocationWitness& witness, ReadOnlyRoots roots,
+                      int data_length, int children_length);
+
   int32_t data_length() const { return data_length_; }
-  void set_data_length(int32_t value) { data_length_ = value; }
 
   int32_t children_length() const { return children_length_; }
-  void set_children_length(int32_t value) { children_length_ = value; }
 
   inline uint8_t get(int index) const;
   inline void set(int index, uint8_t value);
@@ -126,8 +127,9 @@ V8_OBJECT class PreparseData : public HeapObject {
 
   inline int children_start_offset() const;
 
-  int32_t data_length_;
-  int32_t children_length_;
+  const int32_t data_length_;
+  const int32_t children_length_;
+  V8_TQ_NO_TAIL;
   FLEXIBLE_ARRAY_MEMBER(char, data_and_children);
 } V8_OBJECT_END;
 
@@ -137,6 +139,8 @@ static_assert(IsAligned(OFFSET_OF_DATA_START(PreparseData),
 // Abstract class representing extra data for an uncompiled function, which is
 // not stored in the SharedFunctionInfo.
 V8_OBJECT class UncompiledData : public ExposedTrustedObject {
+  V8_IT_ABSTRACT;
+
  public:
   inline Tagged<String> inferred_name() const;
   inline void set_inferred_name(Tagged<String> value,
@@ -169,6 +173,8 @@ V8_OBJECT class UncompiledData : public ExposedTrustedObject {
 // data from the pre-parser, either because it's a leaf function or because the
 // pre-parser bailed out.
 V8_OBJECT class UncompiledDataWithoutPreparseData : public UncompiledData {
+  V8_IT_OWN_TYPE;
+
  public:
   DECL_PRINTER(UncompiledDataWithoutPreparseData)
   DECL_VERIFIER(UncompiledDataWithoutPreparseData)
@@ -179,6 +185,8 @@ V8_OBJECT class UncompiledDataWithoutPreparseData : public UncompiledData {
 // Class representing data for an uncompiled function that has pre-parsed scope
 // data.
 V8_OBJECT class UncompiledDataWithPreparseData : public UncompiledData {
+  V8_IT_OWN_TYPE;
+
  public:
   inline Tagged<PreparseData> preparse_data() const;
   inline void set_preparse_data(Tagged<PreparseData> value,
@@ -283,7 +291,6 @@ V8_OBJECT class SharedFunctionInfo : public HeapObject {
       PropertiesAreFinalBit::Next<bool, 1>;
   using IsHoistedInContextBit =
       PrivateNameLookupSkipsOuterClassBit::Next<bool, 1>;
-  using LiveEditedBit = IsHoistedInContextBit::Next<bool, 1>;
   // Bit positions in |flags2|.
   using ClassScopeHasPrivateBrandBit = base::BitField<bool, 0, 1, uint8_t>;
   using HasStaticPrivateMethodsOrAccessorsBit =
@@ -328,12 +335,15 @@ V8_OBJECT class SharedFunctionInfo : public HeapObject {
   inline uint16_t feedback_slot() const;
   inline void set_feedback_slot(uint16_t value);
 
-  // This initializes the SharedFunctionInfo after allocation. It must
-  // initialize all fields, and leave the SharedFunctionInfo in a state where
-  // it is safe for the GC to visit it.
+  // Initializes the SharedFunctionInfo after allocation. Leaves the
+  // SharedFunctionInfo in a state where it is safe for the GC to visit it.
   //
-  // Important: This function MUST not allocate.
-  void Init(ReadOnlyRoots roots, int unique_id);
+  // Important: These constructors MUST not allocate.
+  SharedFunctionInfo(const AllocationWitness& witness, ReadOnlyRoots roots,
+                     int unique_id);
+  SharedFunctionInfo(const AllocationWitness& witness, ReadOnlyRoots roots,
+                     Tagged<SharedFunctionInfo> other,
+                     IsolateForSandbox isolate);
 
   V8_EXPORT_PRIVATE static constexpr Tagged<Smi> const kNoSharedNameSentinel =
       Smi::zero();
@@ -374,6 +384,8 @@ V8_OBJECT class SharedFunctionInfo : public HeapObject {
   static constexpr int kAgeSize = sizeof(uint16_t);
   static constexpr uint16_t kMaxAge = UINT16_MAX;
 
+  inline bool HasScopeInfo() const;
+  inline bool HasScopeInfo(AcquireLoadTag tag) const;
   DECL_ACQUIRE_GETTER(scope_info, Tagged<ScopeInfo>)
   // Deprecated, use the ACQUIRE version instead.
   DECL_GETTER(scope_info, Tagged<ScopeInfo>)
@@ -395,9 +407,6 @@ V8_OBJECT class SharedFunctionInfo : public HeapObject {
 
   // Start position of this function in the script source.
   V8_EXPORT_PRIVATE int StartPosition() const;
-
-  V8_EXPORT_PRIVATE void UpdateFromFunctionLiteralForLiveEdit(
-      IsolateForSandbox isolate, FunctionLiteral* lit);
 
   // [outer scope info | feedback metadata] Shared storage for outer scope info
   // (on uncompiled functions) and feedback metadata (on compiled functions).
@@ -516,7 +525,7 @@ V8_OBJECT class SharedFunctionInfo : public HeapObject {
 
  public:
   static constexpr IndirectPointerTagRange kTrustedDataIndirectPointerRange =
-      kAllIndirectPointerTags;
+      kSFITrustedDataIndirectPointerRange;
 
   inline bool IsApiFunction() const;
   inline bool is_class_constructor() const;
@@ -700,9 +709,6 @@ V8_OBJECT class SharedFunctionInfo : public HeapObject {
   // Indicates that the private name lookups inside the function skips the
   // closest outer class scope.
   DECL_BOOLEAN_ACCESSORS(private_name_lookup_skips_outer_class)
-
-  // Indicates that the shared function info was live-edited.
-  DECL_BOOLEAN_ACCESSORS(live_edited)
 
   // Indicates that the function is a hoisted-in-context declaration.
   DECL_BOOLEAN_ACCESSORS(is_hoisted_in_context)
@@ -960,25 +966,33 @@ V8_OBJECT class SharedFunctionInfo : public HeapObject {
   inline Tagged<BytecodeArray> GetBytecodeArrayInternal(Isolate* isolate) const;
 
  public:
-  // trusted_function_data may point at any concrete ExposedTrustedObject, so
-  // the indirect-pointer tag range covers all trusted tags.
-  TrustedPointerMember<ExposedTrustedObject, kAllIndirectPointerTags>
+  V8_TQ_CUSTOM_WEAK
+  TrustedPointerMember<ExposedTrustedObject, kTrustedDataIndirectPointerRange>
       trusted_function_data_;
-  TaggedMember<Object> untrusted_function_data_;
-  TaggedMember<NameOrScopeInfoT> name_or_scope_info_;
+  // Set the function data to the "illegal" builtin by default. Ideally we'd use
+  // some sort of "uninitialized" marker here, but it's cheaper to use a valid
+  // builtin and avoid having to do uninitialized checks elsewhere.
+  TaggedMember<Object> untrusted_function_data_{
+      Smi::FromEnum(Builtin::kIllegal)};
+  // Set the name to the no-name sentinel, this can be updated later.
+  TaggedMember<NameOrScopeInfoT> name_or_scope_info_ V8_TQ_TYPE(
+      NoSharedNameSentinel | ScopeInfo | String){kNoSharedNameSentinel};
   TaggedMember<UnionOf<ScopeInfo, FeedbackMetadata, TheHole>>
       outer_scope_info_or_feedback_metadata_;
-  TaggedMember<HeapObject> script_;
-  uint16_t length_;
-  uint16_t formal_parameter_count_;
-  uint16_t function_token_offset_;
-  uint8_t expected_nof_properties_;
-  uint8_t flags2_;
-  std::atomic<uint32_t> flags_;
-  std::atomic<int32_t> function_literal_id_;
+  TaggedMember<HeapObject> script_ V8_TQ_TYPE(Script | Undefined);
+  uint16_t length_ = 0;
+  uint16_t formal_parameter_count_ = JSParameterCount(0);
+  uint16_t function_token_offset_ = 0;
+  uint8_t expected_nof_properties_ = 0;
+  uint8_t flags2_ V8_TQ_TYPE(SharedFunctionInfoFlags2) = 0;
+  // All flags default to false or 0, except ConstructAsBuiltinBit just because
+  // we're using the kIllegal builtin.
+  std::atomic<uint32_t> flags_ V8_TQ_TYPE(SharedFunctionInfoFlags) =
+      ConstructAsBuiltinBit::encode(true);
+  std::atomic<int32_t> function_literal_id_ = kInvalidInfoId;
   int32_t unique_id_;
-  std::atomic<uint16_t> age_;
-  std::atomic<uint16_t> feedback_slot_;
+  std::atomic<uint16_t> age_ = 0;
+  std::atomic<uint16_t> feedback_slot_ = 0;
 } V8_OBJECT_END;
 
 inline constexpr int SharedFunctionInfo::kEndOfStrongFieldsOffset =
@@ -1102,9 +1116,9 @@ V8_OBJECT class OnHeapBasicBlockProfilerData : public HeapObject {
     return sizeof(OnHeapBasicBlockProfilerData);
   }
 
-  TaggedMember<ByteArray> block_ids_;
-  TaggedMember<ByteArray> counts_;
-  TaggedMember<ByteArray> branches_;
+  TaggedMember<ByteArray> block_ids_ V8_TQ_TYPE(FixedInt32Array);
+  TaggedMember<ByteArray> counts_ V8_TQ_TYPE(FixedUInt32Array);
+  TaggedMember<ByteArray> branches_ V8_TQ_TYPE(PodArrayOfIntegerPairs);
   TaggedMember<String> name_;
   TaggedMember<String> schedule_;
   TaggedMember<String> code_;

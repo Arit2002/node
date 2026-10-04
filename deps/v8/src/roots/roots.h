@@ -52,6 +52,50 @@ class RootVisitor;
   EXTRA_IMPORTANT_INTERNALIZED_STRING_LIST_GENERATOR(    \
       INTERNALIZED_STRING_LIST_ADAPTER, V)
 
+// Maps for objects in trusted space that can be serialized during code caching.
+#define SERIALIZABLE_TRUSTED_OBJECT_MAP_ROOT_LIST(V)                   \
+  V(ReadOnly<Map>, bytecode_array_map, BytecodeArrayMap)               \
+  V(ReadOnly<Map>, trusted_byte_array_map, TrustedByteArrayMap)        \
+  V(ReadOnly<Map>, trusted_fixed_array_map, TrustedFixedArrayMap)      \
+  V(ReadOnly<Map>, uncompiled_data_without_preparse_data_map,          \
+    UncompiledDataWithoutPreparseDataMap)                              \
+  V(ReadOnly<Map>, uncompiled_data_with_preparse_data_map,             \
+    UncompiledDataWithPreparseDataMap)                                 \
+  V(ReadOnly<Map>, uncompiled_data_without_preparse_data_with_job_map, \
+    UncompiledDataWithoutPreparseDataWithJobMap)                       \
+  V(ReadOnly<Map>, uncompiled_data_with_preparse_data_and_job_map,     \
+    UncompiledDataWithPreparseDataAndJobMap)
+
+// Maps for objects in trusted space
+#define TRUSTED_OBJECT_MAP_ROOT_LIST(V)                                        \
+  V(ReadOnly<Map>, atom_regexp_data_map, AtomRegExpDataMap)                    \
+  V(ReadOnly<Map>, code_map, CodeMap)                                          \
+  V(ReadOnly<Map>, debug_info_map, DebugInfoMap)                               \
+  V(ReadOnly<Map>, instruction_stream_map, InstructionStreamMap)               \
+  V(ReadOnly<Map>, interpreter_data_map, InterpreterDataMap)                   \
+  V(ReadOnly<Map>, ir_regexp_data_map, IrRegExpDataMap)                        \
+  V(ReadOnly<Map>, protected_fixed_array_map, ProtectedFixedArrayMap)          \
+  V(ReadOnly<Map>, protected_weak_fixed_array_map, ProtectedWeakFixedArrayMap) \
+  V(ReadOnly<Map>, regexp_data_map, RegExpDataMap)                             \
+  V(ReadOnly<Map>, shared_function_info_wrapper_map,                           \
+    SharedFunctionInfoWrapperMap)                                              \
+  V(ReadOnly<Map>, trusted_foreign_map, TrustedForeignMap)                     \
+  V(ReadOnly<Map>, trusted_weak_fixed_array_map, TrustedWeakFixedArrayMap)     \
+  IF_WASM(V, ReadOnly<Map>, wasm_capi_function_data_map,                       \
+          WasmCapiFunctionDataMap)                                             \
+  IF_WASM(V, ReadOnly<Map>, wasm_dispatch_table_map, WasmDispatchTableMap)     \
+  IF_WASM(V, ReadOnly<Map>, wasm_dispatch_table_for_imports_map,               \
+          WasmDispatchTableForImportsMap)                                      \
+  IF_WASM(V, ReadOnly<Map>, wasm_exported_function_data_map,                   \
+          WasmExportedFunctionDataMap)                                         \
+  IF_WASM(V, ReadOnly<Map>, wasm_import_data_map, WasmImportDataMap)           \
+  IF_WASM(V, ReadOnly<Map>, wasm_internal_function_map,                        \
+          WasmInternalFunctionMap)                                             \
+  IF_WASM(V, ReadOnly<Map>, wasm_suspender_object_map, WasmSuspenderObjectMap) \
+  IF_WASM(V, ReadOnly<Map>, wasm_trusted_instance_data_map,                    \
+          WasmTrustedInstanceDataMap)                                          \
+  SERIALIZABLE_TRUSTED_OBJECT_MAP_ROOT_LIST(V)
+
 // Defines all the read-only roots in Heap.
 #define STRONG_READ_ONLY_ROOT_LIST(V)                                          \
   /* Cluster the most popular ones in a few cache lines here at the top.    */ \
@@ -63,21 +107,22 @@ class RootVisitor;
   V(True, true_value, TrueValue)                                               \
   V(False, false_value, FalseValue)                                            \
   EXTRA_IMPORTANT_INTERNALIZED_STRING_ROOT_LIST(V)                             \
-  V(Map, byte_array_map, ByteArrayMap)                                         \
-  V(Map, fixed_array_map, FixedArrayMap)                                       \
-  V(Map, fixed_cow_array_map, FixedCOWArrayMap)                                \
-  V(Map, fixed_double_array_map, FixedDoubleArrayMap)                          \
-  V(Map, hash_table_map, HashTableMap)                                         \
-  V(Map, symbol_map, SymbolMap)                                                \
-  V(Map, seq_one_byte_string_map, SeqOneByteStringMap)                         \
-  V(Map, internalized_one_byte_string_map, InternalizedOneByteStringMap)       \
-  V(Map, shared_function_info_map, SharedFunctionInfoMap)                      \
-  V(Map, cell_map, CellMap)                                                    \
-  V(Map, global_property_cell_map, GlobalPropertyCellMap)                      \
-  V(Map, heap_number_map, HeapNumberMap)                                       \
-  V(Map, transition_array_map, TransitionArrayMap)                             \
-  V(Map, property_array_map, PropertyArrayMap)                                 \
-  V(Map, weak_fixed_array_map, WeakFixedArrayMap)                              \
+  V(ReadOnly<Map>, byte_array_map, ByteArrayMap)                               \
+  V(ReadOnly<Map>, fixed_array_map, FixedArrayMap)                             \
+  V(ReadOnly<Map>, fixed_cow_array_map, FixedCOWArrayMap)                      \
+  V(ReadOnly<Map>, fixed_double_array_map, FixedDoubleArrayMap)                \
+  V(ReadOnly<Map>, hash_table_map, HashTableMap)                               \
+  V(ReadOnly<Map>, symbol_map, SymbolMap)                                      \
+  V(ReadOnly<Map>, seq_one_byte_string_map, SeqOneByteStringMap)               \
+  V(ReadOnly<Map>, internalized_one_byte_string_map,                           \
+    InternalizedOneByteStringMap)                                              \
+  V(ReadOnly<Map>, shared_function_info_map, SharedFunctionInfoMap)            \
+  V(ReadOnly<Map>, cell_map, CellMap)                                          \
+  V(ReadOnly<Map>, global_property_cell_map, GlobalPropertyCellMap)            \
+  V(ReadOnly<Map>, heap_number_map, HeapNumberMap)                             \
+  V(ReadOnly<Map>, transition_array_map, TransitionArrayMap)                   \
+  V(ReadOnly<Map>, property_array_map, PropertyArrayMap)                       \
+  V(ReadOnly<Map>, weak_fixed_array_map, WeakFixedArrayMap)                    \
   V(EnumCache, empty_enum_cache, EmptyEnumCache)                               \
   V(ScopeInfo, empty_scope_info, EmptyScopeInfo)                               \
   V(PropertyArray, empty_property_array, EmptyPropertyArray)                   \
@@ -96,156 +141,140 @@ class RootVisitor;
   V(PropertyCellHole, property_cell_hole_value, PropertyCellHoleValue)         \
   V(StaleRegister, stale_register, StaleRegister)                              \
   V(TerminationException, termination_exception, TerminationException)         \
+  TDZ_HOLE_LIST(V)                                                             \
   V(UninitializedHole, uninitialized_value, UninitializedValue)                \
   /* Maps */                                                                   \
-  V(Map, meta_map, MetaMap)                                                    \
-  V(Map, weak_homomorphic_fixed_array_map, WeakHomomorphicFixedArrayMap)       \
-  V(Map, free_space_map, FreeSpaceMap)                                         \
-  V(Map, one_pointer_filler_map, OnePointerFillerMap)                          \
-  V(Map, two_pointer_filler_map, TwoPointerFillerMap)                          \
-  V(Map, accessor_info_map, AccessorInfoMap)                                   \
-  V(Map, array_list_map, ArrayListMap)                                         \
-  V(Map, atom_regexp_data_map, AtomRegExpDataMap)                              \
-  V(Map, bigint_map, BigIntMap)                                                \
-  V(Map, bytecode_array_map, BytecodeArrayMap)                                 \
-  V(Map, closure_feedback_cell_array_map, ClosureFeedbackCellArrayMap)         \
-  V(Map, code_map, CodeMap)                                                    \
-  V(Map, context_cell_map, ContextCellMap)                                     \
-  V(Map, coverage_info_map, CoverageInfoMap)                                   \
-  V(Map, dictionary_template_info_map, DictionaryTemplateInfoMap)              \
-  V(Map, double_string_cache_map, DoubleStringCacheMap)                        \
-  V(Map, feedback_metadata_map, FeedbackMetadataArrayMap)                      \
-  V(Map, feedback_vector_map, FeedbackVectorMap)                               \
-  V(Map, foreign_map, ForeignMap)                                              \
-  V(Map, hash_seed_wrapper_map, HashSeedWrapperMap)                            \
-  V(Map, function_template_info_map, FunctionTemplateInfoMap)                  \
-  V(Map, global_dictionary_map, GlobalDictionaryMap)                           \
-  V(Map, instruction_stream_map, InstructionStreamMap)                         \
-  V(Map, interceptor_info_map, InterceptorInfoMap)                             \
-  V(Map, ir_regexp_data_map, IrRegExpDataMap)                                  \
-  V(Map, many_closures_cell_map, ManyClosuresCellMap)                          \
-  V(Map, mega_dom_handler_map, MegaDomHandlerMap)                              \
-  V(Map, module_info_map, ModuleInfoMap)                                       \
-  V(Map, name_dictionary_map, NameDictionaryMap)                               \
-  V(Map, name_to_index_hash_table_map, NameToIndexHashTableMap)                \
-  V(Map, no_closures_cell_map, NoClosuresCellMap)                              \
-  V(Map, number_dictionary_map, NumberDictionaryMap)                           \
-  V(Map, object_boilerplate_description_map, ObjectBoilerplateDescriptionMap)  \
-  V(Map, object_template_info_map, ObjectTemplateInfoMap)                      \
-  V(Map, one_closure_cell_map, OneClosureCellMap)                              \
-  V(Map, ordered_hash_map_map, OrderedHashMapMap)                              \
-  V(Map, ordered_hash_set_map, OrderedHashSetMap)                              \
-  V(Map, ordered_name_dictionary_map, OrderedNameDictionaryMap)                \
-  V(Map, preparse_data_map, PreparseDataMap)                                   \
-  V(Map, regexp_data_map, RegExpDataMap)                                       \
-  V(Map, regexp_match_info_map, RegExpMatchInfoMap)                            \
-  V(Map, registered_symbol_table_map, RegisteredSymbolTableMap)                \
-  V(Map, scope_info_map, ScopeInfoMap)                                         \
-  V(Map, script_context_table_map, ScriptContextTableMap)                      \
-  V(Map, sloppy_arguments_elements_map, SloppyArgumentsElementsMap)            \
-  V(Map, simple_name_dictionary_map, SimpleNameDictionaryMap)                  \
-  V(Map, simple_number_dictionary_map, SimpleNumberDictionaryMap)              \
-  V(Map, small_ordered_hash_map_map, SmallOrderedHashMapMap)                   \
-  V(Map, small_ordered_hash_set_map, SmallOrderedHashSetMap)                   \
-  V(Map, small_ordered_name_dictionary_map, SmallOrderedNameDictionaryMap)     \
-  V(Map, source_text_module_map, SourceTextModuleMap)                          \
-  V(Map, swiss_name_dictionary_map, SwissNameDictionaryMap)                    \
-  V(Map, synthetic_module_map, SyntheticModuleMap)                             \
-  IF_WASM(V, Map, wasm_import_data_map, WasmImportDataMap)                     \
-  IF_WASM(V, Map, wasm_capi_function_data_map, WasmCapiFunctionDataMap)        \
-  IF_WASM(V, Map, wasm_dispatch_table_map, WasmDispatchTableMap)               \
-  IF_WASM(V, Map, wasm_dispatch_table_for_imports_map,                         \
-          WasmDispatchTableForImportsMap)                                      \
-  IF_WASM(V, Map, wasm_exported_function_data_map,                             \
-          WasmExportedFunctionDataMap)                                         \
-  IF_WASM(V, Map, wasm_internal_function_map, WasmInternalFunctionMap)         \
-  IF_WASM(V, Map, wasm_func_ref_map, WasmFuncRefMap)                           \
-  IF_WASM(V, Map, wasm_null_map, WasmNullMap)                                  \
-  IF_WASM(V, Map, wasm_resume_data_map, WasmResumeDataMap)                     \
-  IF_WASM(V, Map, wasm_suspender_object_map, WasmSuspenderObjectMap)           \
-  IF_WASM(V, Map, wasm_continuation_object_map, WasmContinuationObjectMap)     \
-  IF_WASM(V, Map, wasm_stack_object_map, WasmStackObjectMap)                   \
-  IF_WASM(V, Map, wasm_trusted_instance_data_map, WasmTrustedInstanceDataMap)  \
-  IF_WASM(V, Map, wasm_type_info_map, WasmTypeInfoMap)                         \
-  V(Map, weak_array_list_map, WeakArrayListMap)                                \
-  V(Map, ephemeron_hash_table_map, EphemeronHashTableMap)                      \
-  V(Map, embedder_data_array_map, EmbedderDataArrayMap)                        \
-  V(Map, weak_cell_map, WeakCellMap)                                           \
-  V(Map, trusted_fixed_array_map, TrustedFixedArrayMap)                        \
-  V(Map, trusted_weak_fixed_array_map, TrustedWeakFixedArrayMap)               \
-  V(Map, trusted_byte_array_map, TrustedByteArrayMap)                          \
-  V(Map, protected_fixed_array_map, ProtectedFixedArrayMap)                    \
-  V(Map, protected_weak_fixed_array_map, ProtectedWeakFixedArrayMap)           \
-  V(Map, interpreter_data_map, InterpreterDataMap)                             \
-  V(Map, debug_info_map, DebugInfoMap)                                         \
-  V(Map, shared_function_info_wrapper_map, SharedFunctionInfoWrapperMap)       \
-  V(Map, trusted_foreign_map, TrustedForeignMap)                               \
-  V(Map, uncompiled_data_without_preparse_data_map,                            \
-    UncompiledDataWithoutPreparseDataMap)                                      \
-  V(Map, uncompiled_data_with_preparse_data_map,                               \
-    UncompiledDataWithPreparseDataMap)                                         \
-  V(Map, uncompiled_data_without_preparse_data_with_job_map,                   \
-    UncompiledDataWithoutPreparseDataWithJobMap)                               \
-  V(Map, uncompiled_data_with_preparse_data_and_job_map,                       \
-    UncompiledDataWithPreparseDataAndJobMap)                                   \
+  V(ReadOnly<Map>, meta_map, MetaMap)                                          \
+  V(ReadOnly<Map>, weak_homomorphic_fixed_array_map,                           \
+    WeakHomomorphicFixedArrayMap)                                              \
+  V(ReadOnly<Map>, free_space_map, FreeSpaceMap)                               \
+  V(ReadOnly<Map>, one_pointer_filler_map, OnePointerFillerMap)                \
+  V(ReadOnly<Map>, two_pointer_filler_map, TwoPointerFillerMap)                \
+  V(ReadOnly<Map>, accessor_info_map, AccessorInfoMap)                         \
+  V(ReadOnly<Map>, array_list_map, ArrayListMap)                               \
+  V(ReadOnly<Map>, bigint_map, BigIntMap)                                      \
+  V(ReadOnly<Map>, closure_feedback_cell_array_map,                            \
+    ClosureFeedbackCellArrayMap)                                               \
+  V(ReadOnly<Map>, context_cell_map, ContextCellMap)                           \
+  V(ReadOnly<Map>, coverage_info_map, CoverageInfoMap)                         \
+  V(ReadOnly<Map>, dictionary_template_info_map, DictionaryTemplateInfoMap)    \
+  V(ReadOnly<Map>, double_string_cache_map, DoubleStringCacheMap)              \
+  V(ReadOnly<Map>, feedback_metadata_map, FeedbackMetadataArrayMap)            \
+  V(ReadOnly<Map>, feedback_vector_map, FeedbackVectorMap)                     \
+  V(ReadOnly<Map>, foreign_map, ForeignMap)                                    \
+  V(ReadOnly<Map>, hash_seed_wrapper_map, HashSeedWrapperMap)                  \
+  V(ReadOnly<Map>, function_template_info_map, FunctionTemplateInfoMap)        \
+  V(ReadOnly<Map>, global_dictionary_map, GlobalDictionaryMap)                 \
+  V(ReadOnly<Map>, interceptor_info_map, InterceptorInfoMap)                   \
+  V(ReadOnly<Map>, many_closures_cell_map, ManyClosuresCellMap)                \
+  V(ReadOnly<Map>, mega_dom_handler_map, MegaDomHandlerMap)                    \
+  V(ReadOnly<Map>, module_info_map, ModuleInfoMap)                             \
+  V(ReadOnly<Map>, name_dictionary_map, NameDictionaryMap)                     \
+  V(ReadOnly<Map>, name_to_index_hash_table_map, NameToIndexHashTableMap)      \
+  V(ReadOnly<Map>, no_closures_cell_map, NoClosuresCellMap)                    \
+  V(ReadOnly<Map>, number_dictionary_map, NumberDictionaryMap)                 \
+  V(ReadOnly<Map>, object_boilerplate_description_map,                         \
+    ObjectBoilerplateDescriptionMap)                                           \
+  V(ReadOnly<Map>, object_template_info_map, ObjectTemplateInfoMap)            \
+  V(ReadOnly<Map>, one_closure_cell_map, OneClosureCellMap)                    \
+  V(ReadOnly<Map>, ordered_hash_map_map, OrderedHashMapMap)                    \
+  V(ReadOnly<Map>, ordered_hash_set_map, OrderedHashSetMap)                    \
+  V(ReadOnly<Map>, ordered_name_dictionary_map, OrderedNameDictionaryMap)      \
+  V(ReadOnly<Map>, preparse_data_map, PreparseDataMap)                         \
+  V(ReadOnly<Map>, regexp_match_info_map, RegExpMatchInfoMap)                  \
+  V(ReadOnly<Map>, registered_symbol_table_map, RegisteredSymbolTableMap)      \
+  V(ReadOnly<Map>, scope_info_map, ScopeInfoMap)                               \
+  V(ReadOnly<Map>, script_context_table_map, ScriptContextTableMap)            \
+  V(ReadOnly<Map>, sloppy_arguments_elements_map, SloppyArgumentsElementsMap)  \
+  V(ReadOnly<Map>, simple_name_dictionary_map, SimpleNameDictionaryMap)        \
+  V(ReadOnly<Map>, simple_number_dictionary_map, SimpleNumberDictionaryMap)    \
+  V(ReadOnly<Map>, small_ordered_hash_map_map, SmallOrderedHashMapMap)         \
+  V(ReadOnly<Map>, small_ordered_hash_set_map, SmallOrderedHashSetMap)         \
+  V(ReadOnly<Map>, small_ordered_name_dictionary_map,                          \
+    SmallOrderedNameDictionaryMap)                                             \
+  V(ReadOnly<Map>, source_text_module_map, SourceTextModuleMap)                \
+  V(ReadOnly<Map>, swiss_name_dictionary_map, SwissNameDictionaryMap)          \
+  V(ReadOnly<Map>, synthetic_module_map, SyntheticModuleMap)                   \
+  IF_WASM(V, ReadOnly<Map>, wasm_func_ref_map, WasmFuncRefMap)                 \
+  IF_WASM(V, ReadOnly<Map>, wasm_null_map, WasmNullMap)                        \
+  IF_WASM(V, ReadOnly<Map>, wasm_resume_data_map, WasmResumeDataMap)           \
+  IF_WASM(V, ReadOnly<Map>, wasm_continuation_object_map,                      \
+          WasmContinuationObjectMap)                                           \
+  IF_WASM(V, ReadOnly<Map>, wasm_stack_object_map, WasmStackObjectMap)         \
+  IF_WASM(V, ReadOnly<Map>, wasm_type_info_map, WasmTypeInfoMap)               \
+  V(ReadOnly<Map>, weak_array_list_map, WeakArrayListMap)                      \
+  V(ReadOnly<Map>, ephemeron_hash_table_map, EphemeronHashTableMap)            \
+  V(ReadOnly<Map>, embedder_data_array_map, EmbedderDataArrayMap)              \
+  V(ReadOnly<Map>, weak_cell_map, WeakCellMap)                                 \
+  V(ReadOnly<Map>, uninitialized_heap_number_map, UninitializedHeapNumberMap)  \
+  TRUSTED_OBJECT_MAP_ROOT_LIST(V)                                              \
   /* String maps */                                                            \
-  V(Map, seq_two_byte_string_map, SeqTwoByteStringMap)                         \
-  V(Map, cons_two_byte_string_map, ConsTwoByteStringMap)                       \
-  V(Map, cons_one_byte_string_map, ConsOneByteStringMap)                       \
-  V(Map, thin_two_byte_string_map, ThinTwoByteStringMap)                       \
-  V(Map, thin_one_byte_string_map, ThinOneByteStringMap)                       \
-  V(Map, sliced_two_byte_string_map, SlicedTwoByteStringMap)                   \
-  V(Map, sliced_one_byte_string_map, SlicedOneByteStringMap)                   \
-  V(Map, external_two_byte_string_map, ExternalTwoByteStringMap)               \
-  V(Map, external_one_byte_string_map, ExternalOneByteStringMap)               \
-  V(Map, internalized_two_byte_string_map, InternalizedTwoByteStringMap)       \
-  V(Map, external_internalized_two_byte_string_map,                            \
+  V(ReadOnly<Map>, seq_two_byte_string_map, SeqTwoByteStringMap)               \
+  V(ReadOnly<Map>, cons_two_byte_string_map, ConsTwoByteStringMap)             \
+  V(ReadOnly<Map>, cons_one_byte_string_map, ConsOneByteStringMap)             \
+  V(ReadOnly<Map>, thin_two_byte_string_map, ThinTwoByteStringMap)             \
+  V(ReadOnly<Map>, thin_one_byte_string_map, ThinOneByteStringMap)             \
+  V(ReadOnly<Map>, sliced_two_byte_string_map, SlicedTwoByteStringMap)         \
+  V(ReadOnly<Map>, sliced_one_byte_string_map, SlicedOneByteStringMap)         \
+  V(ReadOnly<Map>, external_two_byte_string_map, ExternalTwoByteStringMap)     \
+  V(ReadOnly<Map>, external_one_byte_string_map, ExternalOneByteStringMap)     \
+  V(ReadOnly<Map>, internalized_two_byte_string_map,                           \
+    InternalizedTwoByteStringMap)                                              \
+  V(ReadOnly<Map>, external_internalized_two_byte_string_map,                  \
     ExternalInternalizedTwoByteStringMap)                                      \
-  V(Map, external_internalized_one_byte_string_map,                            \
+  V(ReadOnly<Map>, external_internalized_one_byte_string_map,                  \
     ExternalInternalizedOneByteStringMap)                                      \
-  V(Map, uncached_external_internalized_two_byte_string_map,                   \
+  V(ReadOnly<Map>, uncached_external_internalized_two_byte_string_map,         \
     UncachedExternalInternalizedTwoByteStringMap)                              \
-  V(Map, uncached_external_internalized_one_byte_string_map,                   \
+  V(ReadOnly<Map>, uncached_external_internalized_one_byte_string_map,         \
     UncachedExternalInternalizedOneByteStringMap)                              \
-  V(Map, uncached_external_two_byte_string_map,                                \
+  V(ReadOnly<Map>, uncached_external_two_byte_string_map,                      \
     UncachedExternalTwoByteStringMap)                                          \
-  V(Map, uncached_external_one_byte_string_map,                                \
+  V(ReadOnly<Map>, uncached_external_one_byte_string_map,                      \
     UncachedExternalOneByteStringMap)                                          \
-  V(Map, shared_seq_one_byte_string_map, SharedSeqOneByteStringMap)            \
-  V(Map, shared_seq_two_byte_string_map, SharedSeqTwoByteStringMap)            \
-  V(Map, shared_external_one_byte_string_map, SharedExternalOneByteStringMap)  \
-  V(Map, shared_external_two_byte_string_map, SharedExternalTwoByteStringMap)  \
-  V(Map, shared_uncached_external_one_byte_string_map,                         \
+  V(ReadOnly<Map>, shared_seq_one_byte_string_map, SharedSeqOneByteStringMap)  \
+  V(ReadOnly<Map>, shared_seq_two_byte_string_map, SharedSeqTwoByteStringMap)  \
+  V(ReadOnly<Map>, shared_external_one_byte_string_map,                        \
+    SharedExternalOneByteStringMap)                                            \
+  V(ReadOnly<Map>, shared_external_two_byte_string_map,                        \
+    SharedExternalTwoByteStringMap)                                            \
+  V(ReadOnly<Map>, shared_uncached_external_one_byte_string_map,               \
     SharedUncachedExternalOneByteStringMap)                                    \
-  V(Map, shared_uncached_external_two_byte_string_map,                         \
+  V(ReadOnly<Map>, shared_uncached_external_two_byte_string_map,               \
     SharedUncachedExternalTwoByteStringMap)                                    \
   /* Oddball maps */                                                           \
-  V(Map, undefined_map, UndefinedMap)                                          \
-  V(Map, null_map, NullMap)                                                    \
-  V(Map, boolean_map, BooleanMap)                                              \
-  V(Map, hole_map, HoleMap)                                                    \
+  V(ReadOnly<Map>, undefined_map, UndefinedMap)                                \
+  V(ReadOnly<Map>, null_map, NullMap)                                          \
+  V(ReadOnly<Map>, boolean_map, BooleanMap)                                    \
+  V(ReadOnly<Map>, hole_map, HoleMap)                                          \
   /* Shared space object maps */                                               \
-  V(Map, js_shared_array_map, JSSharedArrayMap)                                \
-  V(Map, js_atomics_mutex_map, JSAtomicsMutexMap)                              \
-  V(Map, js_atomics_condition_map, JSAtomicsConditionMap)                      \
-  V(Map, descriptor_array_map, DescriptorArrayMap)                             \
-  V(Map, on_heap_basic_block_profiler_data_map,                                \
+  V(ReadOnly<Map>, js_shared_array_map, JSSharedArrayMap)                      \
+  V(ReadOnly<Map>, js_atomics_mutex_map, JSAtomicsMutexMap)                    \
+  V(ReadOnly<Map>, js_atomics_condition_map, JSAtomicsConditionMap)            \
+  V(ReadOnly<Map>, descriptor_array_map, DescriptorArrayMap)                   \
+  V(ReadOnly<Map>, on_heap_basic_block_profiler_data_map,                      \
     OnHeapBasicBlockProfilerDataMap)                                           \
-  V(Map, turbofan_bitset_type_map, TurbofanBitsetTypeMap)                      \
-  V(Map, turbofan_union_type_map, TurbofanUnionTypeMap)                        \
-  V(Map, turbofan_range_type_map, TurbofanRangeTypeMap)                        \
-  V(Map, turbofan_heap_constant_type_map, TurbofanHeapConstantTypeMap)         \
-  V(Map, turbofan_other_number_constant_type_map,                              \
+  V(ReadOnly<Map>, turbofan_bitset_type_map, TurbofanBitsetTypeMap)            \
+  V(ReadOnly<Map>, turbofan_union_type_map, TurbofanUnionTypeMap)              \
+  V(ReadOnly<Map>, turbofan_range_type_map, TurbofanRangeTypeMap)              \
+  V(ReadOnly<Map>, turbofan_heap_constant_type_map,                            \
+    TurbofanHeapConstantTypeMap)                                               \
+  V(ReadOnly<Map>, turbofan_other_number_constant_type_map,                    \
     TurbofanOtherNumberConstantTypeMap)                                        \
-  V(Map, turboshaft_word32range_type_map, TurboshaftWord32RangeTypeMap)        \
-  V(Map, turboshaft_word32set_type_map, TurboshaftWord32SetTypeMap)            \
-  V(Map, turboshaft_word64range_type_map, TurboshaftWord64RangeTypeMap)        \
-  V(Map, turboshaft_word64set_type_map, TurboshaftWord64SetTypeMap)            \
-  V(Map, turboshaft_float64range_type_map, TurboshaftFloat64RangeTypeMap)      \
-  V(Map, turboshaft_float64set_type_map, TurboshaftFloat64SetTypeMap)          \
-  V(Map, sort_state_map, SortStateMap)                                         \
-  IF_WASM(V, Map, wasm_fast_api_call_data_map, WasmFastApiCallDataMap)         \
-  IF_WASM(V, Map, wasm_string_view_iter_map, WasmStringViewIterMap)            \
+  V(ReadOnly<Map>, turboshaft_word32range_type_map,                            \
+    TurboshaftWord32RangeTypeMap)                                              \
+  V(ReadOnly<Map>, turboshaft_word32set_type_map, TurboshaftWord32SetTypeMap)  \
+  V(ReadOnly<Map>, turboshaft_word64range_type_map,                            \
+    TurboshaftWord64RangeTypeMap)                                              \
+  V(ReadOnly<Map>, turboshaft_word64set_type_map, TurboshaftWord64SetTypeMap)  \
+  V(ReadOnly<Map>, turboshaft_float64range_type_map,                           \
+    TurboshaftFloat64RangeTypeMap)                                             \
+  V(ReadOnly<Map>, turboshaft_float64set_type_map,                             \
+    TurboshaftFloat64SetTypeMap)                                               \
+  V(ReadOnly<Map>, sort_state_map, SortStateMap)                               \
+  IF_WASM(V, ReadOnly<Map>, wasm_fast_api_call_data_map,                       \
+          WasmFastApiCallDataMap)                                              \
+  IF_WASM(V, ReadOnly<Map>, wasm_string_view_iter_map, WasmStringViewIterMap)  \
   /* Canonical empty values */                                                 \
   V(ByteArray, empty_byte_array, EmptyByteArray)                               \
   V(ObjectBoilerplateDescription, empty_object_boilerplate_description,        \
@@ -419,6 +448,8 @@ class RootVisitor;
   /* Caches */                                                              \
   V(SmiStringCache, smi_string_cache, SmiStringCache)                       \
   V(DoubleStringCache, double_string_cache, DoubleStringCache)              \
+  /* Allocated on first use, so it must be loaded rather than baked in. */  \
+  V(FixedArray, regexp_split_cache, RegExpSplitCache)                       \
   /* undefined or BigInt. Caching divisors used for modulo divisions. */    \
   V(Object, cached_bigint_divisor, CachedBigIntDivisor)                     \
   V(Object, next_cached_bigint_divisor, NextCachedBigIntDivisor)            \
@@ -447,6 +478,9 @@ class RootVisitor;
   V(HeapObject, locals_block_list_cache, DebugLocalsBlockListCache)         \
   IF_WASM(V, WeakFixedArray, js_to_wasm_wrappers, JSToWasmWrappers)         \
   IF_WASM(V, WeakFixedArray, wasm_canonical_rtts, WasmCanonicalRtts)        \
+  /* Only updated/used on the shared-space isolate */                       \
+  IF_WASM(V, WeakFixedArray, wasm_shared_canonical_rtts,                    \
+          WasmSharedCanonicalRtts)                                          \
   /* Internal SharedFunctionInfos */                                        \
   V(FunctionTemplateInfo, error_stack_getter_fun_template,                  \
     ErrorStackGetterSharedFun)                                              \
@@ -504,20 +538,21 @@ class RootVisitor;
 #define ACCESSOR_INFO_ROOT_LIST(V) \
   ACCESSOR_INFO_LIST_GENERATOR(ACCESSOR_INFO_ROOT_LIST_ADAPTER, V)
 
-#define READ_ONLY_ROOT_LIST(V)                   \
-  STRONG_READ_ONLY_ROOT_LIST(V)                  \
-  INTERNALIZED_STRING_ROOT_LIST(V)               \
-  PRIVATE_SYMBOL_ROOT_LIST(V)                    \
-  PUBLIC_SYMBOL_ROOT_LIST(V)                     \
-  WELL_KNOWN_SYMBOL_ROOT_LIST(V)                 \
-  STRUCT_MAPS_LIST(V)                            \
-  ALLOCATION_SITE_MAPS_LIST(V)                   \
-  NAME_FOR_PROTECTOR_ROOT_LIST(V)                \
-  DATA_HANDLER_MAPS_LIST(V)                      \
-  /* Maps */                                     \
-  V(Map, external_map, ExternalMap)              \
-  V(Map, message_object_map, JSMessageObjectMap) \
-  V(Map, cpp_heap_external_map, CppHeapExternalMap)
+#define READ_ONLY_ROOT_LIST(V)                                \
+  STRONG_READ_ONLY_ROOT_LIST(V)                               \
+  INTERNALIZED_STRING_ROOT_LIST(V)                            \
+  PRIVATE_SYMBOL_ROOT_LIST(V)                                 \
+  PUBLIC_SYMBOL_ROOT_LIST(V)                                  \
+  WELL_KNOWN_SYMBOL_ROOT_LIST(V)                              \
+  STRUCT_MAPS_LIST(V)                                         \
+  ALLOCATION_SITE_MAPS_LIST(V)                                \
+  NAME_FOR_PROTECTOR_ROOT_LIST(V)                             \
+  DATA_HANDLER_MAPS_LIST(V)                                   \
+  /* Maps */                                                  \
+  V(ReadOnly<Map>, external_map, ExternalMap)                 \
+  V(ReadOnly<Map>, message_object_map, JSMessageObjectMap)    \
+  V(ReadOnly<Map>, cpp_heap_external_map, CppHeapExternalMap) \
+  V(ReadOnly<Map>, cpp_gc_managed_base_map, CppGCManagedBaseMap)
 
 #define MUTABLE_ROOT_LIST(V)            \
   STRONG_MUTABLE_IMMOVABLE_ROOT_LIST(V) \
@@ -537,6 +572,10 @@ enum class RootIndex : uint16_t {
 #undef DECL
 
   kRootListLength,
+
+#ifndef V8_ENABLE_TDZ_HOLE
+  kTdzHoleValue = kTheHoleValue,
+#endif
 
   // Helper aliases for inclusive regions of root indices.
   kFirstRoot = 0,
@@ -566,6 +605,18 @@ enum class RootIndex : uint16_t {
   kFirstNameForProtector = kconstructor_string,
   kNameForProtectorCount = 0 NAME_FOR_PROTECTOR_ROOT_LIST(COUNT_ROOT),
   kLastNameForProtector = kFirstNameForProtector + kNameForProtectorCount - 1,
+
+  kTrustedObjectMapRootsCount = 0 TRUSTED_OBJECT_MAP_ROOT_LIST(COUNT_ROOT),
+  kFirstTrustedObjectMap = kAtomRegExpDataMap,
+  kLastTrustedObjectMap =
+      kFirstTrustedObjectMap + kTrustedObjectMapRootsCount - 1,
+
+  kSerializableTrustedObjectMapRootsCount =
+      0 SERIALIZABLE_TRUSTED_OBJECT_MAP_ROOT_LIST(COUNT_ROOT),
+  kFirstSerializableTrustedObjectMap = kBytecodeArrayMap,
+  kLastSerializableTrustedObjectMap =
+      kFirstSerializableTrustedObjectMap +
+      kSerializableTrustedObjectMapRootsCount - 1,
 
   // The strong roots visited by the garbage collector (not including read-only
   // roots).
@@ -606,9 +657,27 @@ static_assert(RootIndex::kFirstNameForProtector <=
 NAME_FOR_PROTECTOR_ROOT_LIST(FOR_PROTECTOR_CHECK)
 #undef FOR_PROTECTOR_CHECK
 
-#define ROOT_TYPE_FWD_DECL(Type, name, CamelName) class Type;
-ROOT_LIST(ROOT_TYPE_FWD_DECL)
-#undef ROOT_TYPE_FWD_DECL
+static_assert(RootIndex::kFirstTrustedObjectMap <=
+              RootIndex::kLastTrustedObjectMap);
+#define FOR_TRUSTED_MAP_CHECK(type, name, CamelName)                           \
+  static_assert(RootIndex::kFirstTrustedObjectMap <= RootIndex::k##CamelName); \
+  static_assert(RootIndex::k##CamelName <= RootIndex::kLastTrustedObjectMap);
+TRUSTED_OBJECT_MAP_ROOT_LIST(FOR_TRUSTED_MAP_CHECK)
+#undef FOR_TRUSTED_MAP_CHECK
+
+static_assert(RootIndex::kFirstSerializableTrustedObjectMap <=
+              RootIndex::kLastSerializableTrustedObjectMap);
+#define FOR_SERIALIZABLE_TRUSTED_MAP_CHECK(type, name, CamelName) \
+  static_assert(RootIndex::kFirstSerializableTrustedObjectMap <=  \
+                RootIndex::k##CamelName);                         \
+  static_assert(RootIndex::k##CamelName <=                        \
+                RootIndex::kLastSerializableTrustedObjectMap);
+SERIALIZABLE_TRUSTED_OBJECT_MAP_ROOT_LIST(FOR_SERIALIZABLE_TRUSTED_MAP_CHECK)
+#undef FOR_SERIALIZABLE_TRUSTED_MAP_CHECK
+
+#define DEF_STRUCT_FWD_DECLARATION(NAME, Name, name) class Name;
+STRUCT_LIST(DEF_STRUCT_FWD_DECLARATION)
+#undef DEF_STRUCT_FWD_DECLARATION
 
 // Represents a storage of V8 heap roots.
 class RootsTable {
@@ -631,6 +700,9 @@ class RootsTable {
 #define ROOT_ACCESSOR(Type, name, CamelName) \
   V8_INLINE IndirectHandle<Type> name();
   ROOT_LIST(ROOT_ACCESSOR)
+#ifndef V8_ENABLE_TDZ_HOLE
+  ROOT_ACCESSOR(TdzHole, tdz_hole_value, TdzHoleValue)
+#endif
 #undef ROOT_ACCESSOR
 
   V8_INLINE IndirectHandle<Object> handle_at(RootIndex root_index);
@@ -674,6 +746,21 @@ class RootsTable {
     static_assert(static_cast<int>(RootIndex::kFirstReadOnlyRoot) == 0);
     return static_cast<unsigned>(root_index) <=
            static_cast<unsigned>(RootIndex::kLastReadOnlyRoot);
+  }
+
+  static constexpr bool IsInTrustedObjectMapList(RootIndex root_index) {
+    return static_cast<unsigned>(root_index) -
+               static_cast<unsigned>(RootIndex::kFirstTrustedObjectMap) <
+           static_cast<unsigned>(RootIndex::kTrustedObjectMapRootsCount);
+  }
+
+  static constexpr bool IsInSerializableTrustedObjectMapList(
+      RootIndex root_index) {
+    return static_cast<unsigned>(root_index) -
+               static_cast<unsigned>(
+                   RootIndex::kFirstSerializableTrustedObjectMap) <
+           static_cast<unsigned>(
+               RootIndex::kSerializableTrustedObjectMapRootsCount);
   }
 
   static constexpr RootIndex SingleCharacterStringIndex(int c) {
@@ -779,6 +866,9 @@ class ReadOnlyRoots {
   V8_RO_CONST V8_INLINE Tagged<Type> unchecked_##name() const;
 
   READ_ONLY_ROOT_LIST(ROOT_ACCESSOR)
+#ifndef V8_ENABLE_TDZ_HOLE
+  ROOT_ACCESSOR(TdzHole, tdz_hole_value, TdzHoleValue)
+#endif
 #undef ROOT_ACCESSOR
 
   V8_INLINE bool IsNameForProtector(Tagged<HeapObject> object) const;

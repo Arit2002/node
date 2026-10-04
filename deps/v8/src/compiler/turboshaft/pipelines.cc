@@ -43,7 +43,7 @@ bool Pipeline::AllocateRegisters(const RegisterConfiguration* config,
     verifier_zone.reset(
         new Zone(allocator, kRegisterAllocatorVerifierZoneName));
     verifier = verifier_zone->New<RegisterAllocatorVerifier>(
-        verifier_zone.get(), config, data()->sequence(), data()->frame());
+        verifier_zone.get(), data()->sequence(), data()->frame());
   }
 
 #ifdef DEBUG
@@ -206,5 +206,7 @@ bool Pipeline::CreateGraphFromTurbofan(compiler::TFPipelineData* turbofan_data,
 
   return true;
 }
+
+#undef RUN_MAYBE_ABORT
 
 }  // namespace v8::internal::compiler::turboshaft

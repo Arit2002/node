@@ -39,6 +39,7 @@
 #include "src/objects/map.h"
 #include "src/objects/megadom-handler.h"
 #include "src/objects/microtask.h"
+#include "src/objects/object-conversions-inl.h"
 #include "src/objects/objects-inl.h"
 #include "src/objects/oddball-inl.h"
 #include "src/objects/ordered-hash-table.h"
@@ -87,8 +88,9 @@ bool IsMutableMap(InstanceType instance_type, ElementsKind elements_kind) {
       InstanceTypeChecker::IsAlwaysSharedSpaceJSObject(instance_type);
   bool is_wasm_object = false;
 #if V8_ENABLE_WEBASSEMBLY
-  is_wasm_object =
-      instance_type == WASM_STRUCT_TYPE || instance_type == WASM_ARRAY_TYPE;
+  is_wasm_object = instance_type == WASM_STRUCT_TYPE ||
+                   instance_type == WASM_CUSTOM_MAP_TYPE ||
+                   instance_type == WASM_ARRAY_TYPE;
 #endif  // V8_ENABLE_WEBASSEMBLY
   DCHECK_IMPLIES(is_js_object &&
                      !Map::CanHaveFastTransitionableElementsKind(instance_type),
@@ -400,24 +402,24 @@ bool Heap::CreateEarlyReadOnlyMapsAndObjects() {
       Tagged<Map> map = UncheckedCast<Map>(obj);
       roots_table()[entry.index] = map.ptr();
     }
-    ALLOCATE_AND_SET_ROOT(Map, symbol_map, Map::kSize);
+    ALLOCATE_AND_SET_ROOT(ReadOnly<Map>, symbol_map, Map::kSize);
 
-    ALLOCATE_AND_SET_ROOT(Map, meta_map, Map::kSize);
+    ALLOCATE_AND_SET_ROOT(ReadOnly<Map>, meta_map, Map::kSize);
     // Keep HeapNumber and Oddball maps together for cheap NumberOrOddball
     // checks.
-    ALLOCATE_AND_SET_ROOT(Map, undefined_map, Map::kSize);
-    ALLOCATE_AND_SET_ROOT(Map, null_map, Map::kSize);
+    ALLOCATE_AND_SET_ROOT(ReadOnly<Map>, undefined_map, Map::kSize);
+    ALLOCATE_AND_SET_ROOT(ReadOnly<Map>, null_map, Map::kSize);
     // Keep HeapNumber and Boolean maps together for cheap NumberOrBoolean
     // checks.
-    ALLOCATE_AND_SET_ROOT(Map, boolean_map, Map::kSize);
+    ALLOCATE_AND_SET_ROOT(ReadOnly<Map>, boolean_map, Map::kSize);
     // Keep HeapNumber and BigInt maps together for cheaper numerics checks.
-    ALLOCATE_AND_SET_ROOT(Map, heap_number_map, Map::kSize);
-    ALLOCATE_AND_SET_ROOT(Map, bigint_map, Map::kSize);
+    ALLOCATE_AND_SET_ROOT(ReadOnly<Map>, heap_number_map, Map::kSize);
+    ALLOCATE_AND_SET_ROOT(ReadOnly<Map>, bigint_map, Map::kSize);
     // Keep FreeSpace and filler maps together for cheap
     // `IsFreeSpaceOrFiller()`.
-    ALLOCATE_AND_SET_ROOT(Map, free_space_map, Map::kSize);
-    ALLOCATE_AND_SET_ROOT(Map, one_pointer_filler_map, Map::kSize);
-    ALLOCATE_AND_SET_ROOT(Map, two_pointer_filler_map, Map::kSize);
+    ALLOCATE_AND_SET_ROOT(ReadOnly<Map>, free_space_map, Map::kSize);
+    ALLOCATE_AND_SET_ROOT(ReadOnly<Map>, one_pointer_filler_map, Map::kSize);
+    ALLOCATE_AND_SET_ROOT(ReadOnly<Map>, two_pointer_filler_map, Map::kSize);
 
 #undef ALLOCATE_AND_SET_ROOT
 
@@ -458,21 +460,22 @@ bool Heap::CreateEarlyReadOnlyMapsAndObjects() {
     symbol_map->SetConstructorFunctionIndex(Context::SYMBOL_FUNCTION_INDEX);
 
     // Finally, initialise the non-map objects using those maps.
-    undefined_value->set_map_after_allocation(isolate(), undefined_map,
-                                              SKIP_WRITE_BARRIER);
-    undefined_value->set_kind(Oddball::kUndefined);
-
-    null_value->set_map_after_allocation(isolate(), null_map,
-                                         SKIP_WRITE_BARRIER);
-    null_value->set_kind(Oddball::kNull);
-
-    true_value->set_map_after_allocation(isolate(), boolean_map,
-                                         SKIP_WRITE_BARRIER);
-    true_value->set_kind(Oddball::kTrue);
-
-    false_value->set_map_after_allocation(isolate(), boolean_map,
-                                          SKIP_WRITE_BARRIER);
-    false_value->set_kind(Oddball::kFalse);
+    {
+      AllocationWitness witness(undefined_value, AllocationType::kReadOnly);
+      new (witness) Undefined(witness, roots);
+    }
+    {
+      AllocationWitness witness(null_value, AllocationType::kReadOnly);
+      new (witness) Null(witness, roots);
+    }
+    {
+      AllocationWitness witness(true_value, AllocationType::kReadOnly);
+      new (witness) True(witness, roots);
+    }
+    {
+      AllocationWitness witness(false_value, AllocationType::kReadOnly);
+      new (witness) False(witness, roots);
+    }
 
     // The empty string is initialised with an empty hash despite being
     // internalized -- this will be calculated once the hashseed is available.
@@ -491,7 +494,7 @@ bool Heap::CreateEarlyReadOnlyMapsAndObjects() {
 
 #define ALLOCATE_PARTIAL_MAP(instance_type, size, field_name)                \
   {                                                                          \
-    Tagged<Map> map;                                                         \
+    Tagged<ReadOnly<Map>> map;                                               \
     if (!AllocatePartialMap((instance_type), (size)).To(&map)) return false; \
     set_##field_name##_map(map);                                             \
   }
@@ -626,7 +629,7 @@ bool Heap::CreateEarlyReadOnlyMapsAndObjects() {
 
 #define ALLOCATE_MAP(instance_type, size, field_name)                  \
   {                                                                    \
-    Tagged<Map> map;                                                   \
+    Tagged<ReadOnly<Map>> map;                                         \
     if (!AllocateMap(AllocationType::kReadOnly, (instance_type), size) \
              .To(&map)) {                                              \
       return false;                                                    \
@@ -679,11 +682,9 @@ bool Heap::CreateEarlyReadOnlyMapsAndObjects() {
       AllocationResult alloc =
           AllocateRaw(sizeof(Cell), AllocationType::kReadOnly);
       if (!alloc.To(&obj)) return false;
-      obj->set_map_after_allocation(isolate(), roots.cell_map(),
-                                    SKIP_WRITE_BARRIER);
-      Cast<Cell>(obj)->set_maybe_value(Map::kPrototypeChainInvalid,
-                                       SKIP_WRITE_BARRIER);
-      set_invalid_prototype_validity_cell(Cast<Cell>(obj));
+      AllocationWitness witness(obj, AllocationType::kReadOnly);
+      set_invalid_prototype_validity_cell(
+          new (witness) Cell(witness, roots, Map::kPrototypeChainInvalid));
     }
 
     ALLOCATE_MAP(PROPERTY_CELL_TYPE, sizeof(PropertyCell), global_property_cell)
@@ -737,6 +738,8 @@ bool Heap::CreateLateReadOnlyNonJSReceiverMaps() {
     }
 
     // The DescriptorArray map is pre-allocated and initialized above.
+    ALLOCATE_MAP(UNINITIALIZED_HEAP_NUMBER_TYPE, sizeof(HeapNumber),
+                 uninitialized_heap_number)
     ALLOCATE_VARSIZE_MAP(TURBOSHAFT_WORD32_SET_TYPE_TYPE,
                          turboshaft_word32set_type)
     ALLOCATE_VARSIZE_MAP(TURBOSHAFT_WORD64_SET_TYPE_TYPE,
@@ -874,7 +877,7 @@ bool Heap::CreateLateReadOnlyJSReceiverMaps() {
 #define ALLOCATE_ALWAYS_SHARED_SPACE_JSOBJECT_MAP(instance_type, size, \
                                                   field_name)          \
   {                                                                    \
-    Tagged<Map> map;                                                   \
+    Tagged<ReadOnly<Map>> map;                                         \
     if (!AllocateMap(AllocationType::kReadOnly, (instance_type), size, \
                      DICTIONARY_ELEMENTS)                              \
              .To(&map)) {                                              \
@@ -904,11 +907,13 @@ bool Heap::CreateLateReadOnlyJSReceiverMaps() {
 
     ALLOCATE_MAP(CPP_HEAP_EXTERNAL_OBJECT_TYPE,
                  CppHeapExternalObject::kHeaderSize, cpp_heap_external)
+    ALLOCATE_MAP(CPP_GCMANAGED_BASE_TYPE, CppGCManagedBase::kHeaderSize,
+                 cpp_gc_managed_base)
   }
 
   // Shared space object maps are immutable and can be in RO space.
   {
-    Tagged<Map> shared_array_map;
+    Tagged<ReadOnly<Map>> shared_array_map;
     if (!AllocateMap(AllocationType::kReadOnly, JS_SHARED_ARRAY_TYPE,
                      JSSharedArray::kSize, SHARED_ARRAY_ELEMENTS,
                      JSSharedArray::kInObjectFieldCount)
@@ -1126,18 +1131,16 @@ bool Heap::CreateReadOnlyObjects() {
 
   {
     // Empty array boilerplate description
-    AllocationResult alloc =
-        Allocate(roots_table().array_boilerplate_description_map(),
-                 AllocationType::kReadOnly);
+    AllocationResult alloc = AllocateRaw(sizeof(ArrayBoilerplateDescription),
+                                         AllocationType::kReadOnly);
     if (!alloc.To(&obj)) return false;
 
-    Cast<ArrayBoilerplateDescription>(obj)->set_constant_elements(
-        roots.empty_fixed_array());
-    Cast<ArrayBoilerplateDescription>(obj)->set_elements_kind(
-        ElementsKind::PACKED_SMI_ELEMENTS);
+    AllocationWitness witness(obj, AllocationType::kReadOnly);
+    set_empty_array_boilerplate_description(
+        new (witness) ArrayBoilerplateDescription(
+            witness, roots, ElementsKind::PACKED_SMI_ELEMENTS,
+            roots.empty_fixed_array()));
   }
-  set_empty_array_boilerplate_description(
-      Cast<ArrayBoilerplateDescription>(obj));
 
   // Empty arrays.
   {
@@ -1177,24 +1180,15 @@ bool Heap::CreateReadOnlyObjects() {
 #undef ENSURE_SINGLE_CHAR_STRINGS_ARE_SINGLE_CHAR
 
   // Finish initializing oddballs after creating the string table.
-  Oddball::Initialize(isolate(), factory->undefined_value(), "undefined",
-                      factory->undefined_nan_value(), "undefined",
-                      Oddball::kUndefined);
-
-  // Initialize the null_value.
-  Oddball::Initialize(isolate(), factory->null_value(), "null",
-                      direct_handle(Smi::zero(), isolate()), "object",
-                      Oddball::kNull);
-
-  // Initialize the true_value.
-  Oddball::Initialize(isolate(), factory->true_value(), "true",
-                      direct_handle(Smi::FromInt(1), isolate()), "boolean",
-                      Oddball::kTrue);
-
-  // Initialize the false_value.
-  Oddball::Initialize(isolate(), factory->false_value(), "false",
-                      direct_handle(Smi::zero(), isolate()), "boolean",
-                      Oddball::kFalse);
+  roots.undefined_value()->FinishInitialization(roots.undefined_string(),
+                                                roots.undefined_nan_value(),
+                                                roots.undefined_string());
+  roots.null_value()->FinishInitialization(roots.null_string(), Smi::zero(),
+                                           roots.object_string());
+  roots.true_value()->FinishInitialization(roots.true_string(), Smi::FromInt(1),
+                                           roots.boolean_string());
+  roots.false_value()->FinishInitialization(roots.false_string(), Smi::zero(),
+                                            roots.boolean_string());
 
   {
     HandleScope handle_scope(isolate());
@@ -1360,11 +1354,9 @@ bool Heap::CreateReadOnlyObjects() {
 #ifdef V8_ENABLE_WEBASSEMBLY
   // Allocate the wasm-null object. It is a regular V8 heap object contained in
   // a V8 page.
-  // In static-roots builds, it is large enough so that its payload (other than
-  // its map word) can be mprotected on OS page granularity. We adjust the
-  // layout such that we have a filler object in the current OS page, and the
-  // wasm-null map word at the end of the current OS page. The payload then is
-  // contained on a separate OS page which can be protected.
+  // In static-roots builds, it is large enough so that it can be mprotected on
+  // OS page granularity, so we fill up the rest of the current OS page with
+  // a filler.
   // In non-static-roots builds, it is a regular object of size {kTaggedSize}
   // and does not need padding.
 #define V8_UNMAP_WASM_NULL_PAYLOAD \
@@ -1373,17 +1365,10 @@ bool Heap::CreateReadOnlyObjects() {
 #if V8_UNMAP_WASM_NULL_PAYLOAD
   // Allocate an unmappable WasmNull.
   {
-    static_assert(WasmNull::kSize ==
-                  WasmNull::kHeaderSize + WasmNull::kPayloadSize);
     Tagged<HeapObject> wasm_null_obj =
-        read_only_space_
-            ->AllocateRawUnmappableAllocation(WasmNull::kHeaderSize,
-                                              WasmNull::kPayloadSize)
+        read_only_space_->AllocateRawUnmappableAllocation(0, WasmNull::kSize)
             .ToObjectChecked();
-    wasm_null_obj->set_map_after_allocation(isolate(), roots.wasm_null_map(),
-                                            SKIP_WRITE_BARRIER);
-    // No need to initialize the payload since it's either empty or unmapped.
-    set_wasm_null(Cast<WasmNull>(wasm_null_obj));
+    set_wasm_null(UncheckedCast<WasmNull>(wasm_null_obj));
   }
 #else
   // Allocate the WasmNull.
@@ -1419,6 +1404,12 @@ bool Heap::CreateReadOnlyObjects() {
   set_property_cell_hole_value(UncheckedCast<PropertyCellHole>(make_hole()));
   set_hash_table_hole_value(UncheckedCast<HashTableHole>(make_hole()));
   set_promise_hole_value(UncheckedCast<PromiseHole>(make_hole()));
+#ifdef V8_ENABLE_TDZ_HOLE
+  set_tdz_hole_value(UncheckedCast<TdzHole>(make_hole()));
+#else
+  // TODO(leszeks): Remove DisabledTdzHole when v8_enable_tdz_hole is removed.
+  set_disabled_tdz_hole_value(UncheckedCast<DisabledTdzHole>(make_hole()));
+#endif
   set_uninitialized_value(UncheckedCast<UninitializedHole>(make_hole()));
   set_arguments_marker(UncheckedCast<ArgumentsMarker>(make_hole()));
   set_termination_exception(UncheckedCast<TerminationException>(make_hole()));
@@ -1487,6 +1478,8 @@ void Heap::CreateInitialMutableObjects() {
   // Allocate regexp caches.
   set_string_split_cache(*factory->NewFixedArray(
       regexp::ResultsCache::kRegExpResultsCacheSize, AllocationType::kOld));
+  // Allocated on first use, see EnsureRegExpSplitCache.
+  set_regexp_split_cache(roots.empty_fixed_array());
   set_regexp_multiple_cache(*factory->NewFixedArray(
       regexp::ResultsCache::kRegExpResultsCacheSize, AllocationType::kOld));
   set_regexp_match_global_atom_cache(*factory->NewFixedArray(
@@ -1501,6 +1494,7 @@ void Heap::CreateInitialMutableObjects() {
 #ifdef V8_ENABLE_WEBASSEMBLY
   set_js_to_wasm_wrappers(roots.empty_weak_fixed_array());
   set_wasm_canonical_rtts(roots.empty_weak_fixed_array());
+  set_wasm_shared_canonical_rtts(roots.empty_weak_fixed_array());
 #endif  // V8_ENABLE_WEBASSEMBLY
 
   set_script_list(roots.empty_weak_array_list());

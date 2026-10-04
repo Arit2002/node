@@ -91,8 +91,8 @@ V8_OBJECT class JSDisplayNames : public JSObject {
   static_assert(LanguageDisplayBit::is_valid(LanguageDisplay::kDialect));
   static_assert(LanguageDisplayBit::is_valid(LanguageDisplay::kStandard));
 
-  inline Tagged<Managed<DisplayNamesInternal>> internal() const;
-  inline void set_internal(Tagged<Managed<DisplayNamesInternal>> value,
+  inline Tagged<CppGCManaged<DisplayNamesInternal>> internal() const;
+  inline void set_internal(Tagged<CppGCManaged<DisplayNamesInternal>> value,
                            WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
   inline int flags() const;
@@ -104,8 +104,8 @@ V8_OBJECT class JSDisplayNames : public JSObject {
   static const int kHeaderSize;
 
  public:
-  TaggedMember<Foreign> internal_;
-  TaggedMember<Smi> flags_;
+  TaggedMember<CppGCManaged<DisplayNamesInternal>> internal_;
+  TaggedMember<Smi> flags_ V8_TQ_TYPE(SmiTagged<JSDisplayNamesFlags>);
 } V8_OBJECT_END;
 
 inline constexpr int JSDisplayNames::kHeaderSize = sizeof(JSDisplayNames);

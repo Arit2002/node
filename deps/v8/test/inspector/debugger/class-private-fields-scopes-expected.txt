@@ -18,6 +18,7 @@ Running test: testScopesPaused
         }
         scopeChain : [
             [0] : {
+                emptyReason : no-variables
                 endLocation : {
                     columnNumber : 5
                     lineNumber : 6

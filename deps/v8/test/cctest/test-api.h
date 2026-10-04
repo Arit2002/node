@@ -279,8 +279,19 @@ static v8::Local<v8::External> MakeData(v8::Isolate* isolate, void* pointer) {
 template <typename T, typename TCallbackInfo>
 static T* GetData(const TCallbackInfo& info) {
   USE(MakeData);
-  return reinterpret_cast<T*>(
-      v8::External::Cast(*info.Data())->Value(kTestConfigTag));
+  v8::Local<v8::Data> data;
+  if constexpr (requires { info.DataV2(); }) {
+    data = info.DataV2();
+  } else {
+    data = info.Data();
+  }
+  return reinterpret_cast<T*>(v8::External::Cast(*data)->Value(kTestConfigTag));
+}
+
+template <typename T>
+static T* GetData(v8::Local<v8::Data> data) {
+  USE(MakeData);
+  return reinterpret_cast<T*>(v8::External::Cast(*data)->Value(kTestConfigTag));
 }
 
 #endif  // V8_TEST_CCTEST_TEST_API_H_

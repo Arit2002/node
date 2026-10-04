@@ -38,6 +38,8 @@ struct CFunctionWithSignature {
 };
 
 V8_OBJECT class TemplateInfo : public HeapObject {
+  V8_IT_ABSTRACT;
+
  public:
   static const int kFastTemplateInstantiationsCacheSize = 1 * KB;
 
@@ -100,10 +102,13 @@ V8_OBJECT class TemplateInfo : public HeapObject {
   using ShouldPromoteToReadOnlyBit = IsCacheableBit::Next<bool, 1>;
   using SerialNumberBits = ShouldPromoteToReadOnlyBit::Next<uint32_t, 29>;
 
-  TaggedMember<Smi> template_info_flags_;
+  TaggedMember<Smi> template_info_flags_
+      V8_TQ_TYPE(SmiTagged<TemplateInfoFlags>);
 } V8_OBJECT_END;
 
 V8_OBJECT class TemplateInfoWithProperties : public TemplateInfo {
+  V8_IT_ABSTRACT;
+
  public:
   inline int number_of_properties() const;
   inline void set_number_of_properties(int value);
@@ -435,11 +440,12 @@ V8_OBJECT class FunctionTemplateInfo : public TemplateInfoWithProperties {
   TaggedMember<UnionOf<String, Undefined>> class_name_;
   TaggedMember<UnionOf<String, Undefined>> interface_name_;
   TaggedMember<UnionOf<FunctionTemplateInfo, Undefined>> signature_;
-  TaggedMember<UnionOf<FunctionTemplateRareData, Undefined>> rare_data_;
+  V8_TQ_ACQ_REL TaggedMember<UnionOf<FunctionTemplateRareData, Undefined>>
+      rare_data_;
   TaggedMember<UnionOf<SharedFunctionInfo, Undefined>> shared_function_info_;
   TaggedMember<Object> cached_property_name_;
-  TaggedMember<Object> callback_data_;
-  uint32_t flag_;
+  V8_TQ_ACQ_REL TaggedMember<Object> callback_data_;
+  uint32_t flag_ V8_TQ_TYPE(FunctionTemplateInfoFlags);
   int16_t length_;
   InstanceType instance_type_;
   uint32_t exception_context_;
@@ -476,7 +482,7 @@ V8_OBJECT class ObjectTemplateInfo : public TemplateInfoWithProperties {
   inline void set_data(int value);
 
   TaggedMember<UnionOf<FunctionTemplateInfo, Undefined>> constructor_;
-  TaggedMember<Smi> data_;
+  TaggedMember<Smi> data_ V8_TQ_TYPE(SmiTagged<ObjectTemplateInfoFlags>);
 
  private:
   using IsImmutablePrototypeBit = base::BitField<bool, 0, 1, uint32_t>;

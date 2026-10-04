@@ -52,11 +52,13 @@ V8_OBJECT class EmbedderDataArray : public HeapObject {
   // EmbedderDataSlots stored inline; each slot occupies
   // kEmbedderDataSlotSize bytes (1 or 2 Address words depending on
   // whether pointer compression is enabled).
+  V8_TQ_NO_TAIL;
   FLEXIBLE_ARRAY_MEMBER(Address, slots);
 } V8_OBJECT_END;
 
 constexpr int EmbedderDataArray::SizeFor(int length) {
-  static_assert(kEmbedderDataSlotSize == sizeof(Address));
+  static_assert(kEmbedderDataSlotSize >= sizeof(Address));
+  static_assert(kEmbedderDataSlotSize % sizeof(Address) == 0);
   return OFFSET_OF_DATA_START(EmbedderDataArray) +
          length * kEmbedderDataSlotSize;
 }

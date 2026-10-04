@@ -392,8 +392,7 @@ class OutOfLineTrap final : public OutOfLineCode {
     // Just encode the stub index. This will be patched when the code
     // is added to the native module and copied into wasm code space.
     __ wasm_call(static_cast<Address>(trap_id), RelocInfo::WASM_STUB_CALL);
-    ReferenceMap* reference_map = gen_->zone()->New<ReferenceMap>(gen_->zone());
-    gen_->RecordSafepoint(reference_map);
+    gen_->RecordSafepointWithoutTaggedSlots();
     __ AssertUnreachable(AbortReason::kUnexpectedReturnFromWasmTrap);
   }
 
@@ -821,9 +820,9 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
         __ cmp(esi, FieldOperand(func, offsetof(JSFunction, context_)));
         __ Assert(equal, AbortReason::kWrongFunctionContext);
       }
-      uint32_t num_arguments =
-          i.InputUint32(instr->JSCallArgumentCountInputIndex());
-      __ CallJSFunction(func, num_arguments);
+      uint32_t expected_parameter_count =
+          i.InputUint32(instr->JSCallExpectedParameterCountInputIndex());
+      __ CallJSFunction(func, expected_parameter_count);
       RecordCallPosition(instr);
       frame_access_state()->ClearSPDelta();
       break;
@@ -1031,7 +1030,6 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kArchStoreWithWriteBarrier:  // Fall thrugh.
     case kArchAtomicStoreWithWriteBarrier: {
       RecordWriteMode mode = RecordWriteModeField::decode(instr->opcode());
-      AtomicMemoryOrder order = AtomicMemoryOrderField::decode(instr->opcode());
       Register object = i.InputRegister(0);
       size_t index = 0;
       Operand operand = i.MemoryOperand(&index);
@@ -1048,11 +1046,13 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       auto ool = zone()->New<OutOfLineRecordWrite>(
           this, object, operand, value, scratch, mode, DetermineStubCallMode());
       if (arch_opcode == kArchStoreWithWriteBarrier ||
-          order == AtomicMemoryOrder::kAcqRel) {
+          AtomicMemoryOrderField::decode(instr->opcode()) ==
+              AtomicMemoryOrder::kAcqRel) {
         __ mov(operand, value);
       } else {
         DCHECK_EQ(arch_opcode, kArchAtomicStoreWithWriteBarrier);
-        DCHECK_EQ(order, AtomicMemoryOrder::kSeqCst);
+        DCHECK_EQ(AtomicMemoryOrderField::decode(instr->opcode()),
+                  AtomicMemoryOrder::kSeqCst);
         __ mov(scratch, value);
         __ xchg(scratch, operand);
       }
@@ -1072,7 +1072,6 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       Operand operand = i.MemoryOperand(&index);
       Register value = i.InputRegister(index);
       Register scratch = i.TempRegister(0);
-      AtomicMemoryOrder order = AtomicMemoryOrderField::decode(instr->opcode());
 
       if (v8_flags.debug_code) {
         // Checking that |value| is not a cleared weakref: our write barrier
@@ -1088,11 +1087,13 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       __ bind(ool->exit());
 
       if (arch_opcode == kArchStoreSkippedWriteBarrier ||
-          order == AtomicMemoryOrder::kAcqRel) {
+          AtomicMemoryOrderField::decode(instr->opcode()) ==
+              AtomicMemoryOrder::kAcqRel) {
         __ mov(operand, value);
       } else {
         DCHECK_EQ(arch_opcode, kArchAtomicStoreSkippedWriteBarrier);
-        DCHECK_EQ(order, AtomicMemoryOrder::kSeqCst);
+        DCHECK_EQ(AtomicMemoryOrderField::decode(instr->opcode()),
+                  AtomicMemoryOrder::kSeqCst);
         __ mov(scratch, value);
         __ xchg(scratch, operand);
       }
@@ -3066,8 +3067,8 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     }
     case kIA32I8x16Popcnt: {
       __ I8x16Popcnt(i.OutputSimd128Register(), i.InputSimd128Register(0),
-                     kScratchDoubleReg, i.TempSimd128Register(0),
-                     i.TempRegister(1));
+                     i.TempRegister(1), kScratchDoubleReg,
+                     i.TempSimd128Register(0));
       break;
     }
     case kIA32S128Const: {
@@ -4150,38 +4151,37 @@ void CodeGenerator::FinishFrame(Frame* frame) {
 }
 
 void CodeGenerator::AssembleConstructFrame() {
+  DCHECK(frame_access_state()->has_frame());
   auto call_descriptor = linkage()->GetIncomingDescriptor();
-  if (frame_access_state()->has_frame()) {
-    if (call_descriptor->IsCFunctionCall()) {
-      __ push(ebp);
-      __ mov(ebp, esp);
+  if (call_descriptor->IsCFunctionCall()) {
+    __ push(ebp);
+    __ mov(ebp, esp);
 #if V8_ENABLE_WEBASSEMBLY
-      if (info()->GetOutputStackFrameType() == StackFrame::C_WASM_ENTRY) {
-        __ Push(Immediate(StackFrame::TypeToMarker(StackFrame::C_WASM_ENTRY)));
-        // Reserve stack space for saving the c_entry_fp later.
-        __ AllocateStackSpace(kSystemPointerSize);
-      }
-#endif  // V8_ENABLE_WEBASSEMBLY
-    } else if (call_descriptor->IsJSFunctionCall()) {
-      __ Prologue();
-    } else {
-      __ StubPrologue(info()->GetOutputStackFrameType());
-#if V8_ENABLE_WEBASSEMBLY
-      if (call_descriptor->IsAnyWasmFunctionCall() ||
-          call_descriptor->IsWasmImportWrapper() ||
-          call_descriptor->IsWasmCapiFunction()) {
-        // For import wrappers and C-API functions, this stack slot is only used
-        // for printing stack traces in V8. Also, it holds a WasmImportData
-        // instead of the trusted instance data, which is taken care of in the
-        // frames accessors.
-        __ push(kWasmImplicitArgRegister);
-      }
-      if (call_descriptor->IsWasmCapiFunction()) {
-        // Reserve space for saving the PC later.
-        __ AllocateStackSpace(kSystemPointerSize);
-      }
-#endif  // V8_ENABLE_WEBASSEMBLY
+    if (info()->GetOutputStackFrameType() == StackFrame::C_WASM_ENTRY) {
+      __ Push(Immediate(StackFrame::TypeToMarker(StackFrame::C_WASM_ENTRY)));
+      // Reserve stack space for saving the c_entry_fp later.
+      __ AllocateStackSpace(kSystemPointerSize);
     }
+#endif  // V8_ENABLE_WEBASSEMBLY
+  } else if (call_descriptor->IsJSFunctionCall()) {
+    __ Prologue();
+  } else {
+    __ StubPrologue(info()->GetOutputStackFrameType());
+#if V8_ENABLE_WEBASSEMBLY
+    if (call_descriptor->IsAnyWasmFunctionCall() ||
+        call_descriptor->IsWasmImportWrapper() ||
+        call_descriptor->IsWasmCapiFunction()) {
+      // For import wrappers and C-API functions, this stack slot is only used
+      // for printing stack traces in V8. Also, it holds a WasmImportData
+      // instead of the trusted instance data, which is taken care of in the
+      // frames accessors.
+      __ push(kWasmImplicitArgRegister);
+    }
+    if (call_descriptor->IsWasmCapiFunction()) {
+      // Reserve space for saving the PC later.
+      __ AllocateStackSpace(kSystemPointerSize);
+    }
+#endif  // V8_ENABLE_WEBASSEMBLY
   }
 
   int required_slots =
@@ -4201,90 +4201,98 @@ void CodeGenerator::AssembleConstructFrame() {
   }
 
   const RegList saves = call_descriptor->CalleeSavedRegisters();
-  if (required_slots > 0) {
-    DCHECK(frame_access_state()->has_frame());
 #if V8_ENABLE_WEBASSEMBLY
-    int32_t stack_space =
-        required_slots * kSystemPointerSize + GetStackCheckOffset();
-    if (info()->IsWasm() && stack_space > 4 * KB) {
-      // For WebAssembly functions with big frames we have to do the stack
-      // overflow check before we construct the frame. Otherwise we may not
-      // have enough space on the stack to call the runtime for the stack
-      // overflow.
-      Label done;
+  const bool is_js_to_wasm = code_kind() == CodeKind::JS_TO_WASM_FUNCTION;
+  DCHECK_GE(required_slots, 0);
+  size_t stack_space =
+      static_cast<size_t>(required_slots) * kSystemPointerSize +
+      GetStackCheckOffset();
+  if (is_js_to_wasm || (info()->IsWasm() && stack_space > 4 * KB)) {
+    // For WebAssembly functions with big frames we have to do the stack
+    // overflow check before we allocate the frame slots. Otherwise we may not
+    // have enough space on the stack to call the runtime for the stack
+    // overflow.
+    // For compiled JS-to-Wasm wrappers, we unconditionally emit a stack check
+    // here because they are entered directly from JavaScript without an
+    // Ignition bytecode stack check, and may be invoked near stack exhaustion.
+    Label done;
 
-      // If the frame is bigger than the stack, we throw the stack overflow
-      // exception unconditionally. Thereby we can avoid the integer overflow
-      // check in the condition code.
-      if (stack_space < v8_flags.stack_size * KB) {
+    // If the frame is bigger than the stack, we throw the stack overflow
+    // exception unconditionally. Thereby we can avoid the integer overflow
+    // check in the condition code.
+    if (stack_space < static_cast<size_t>(v8_flags.stack_size) * KB) {
+      if (stack_space == 0) {
+        __ CompareStackLimit(esp, StackLimitKind::kRealStackLimit);
+      } else {
         Register scratch = esi;
         __ push(scratch);
         __ mov(scratch, esp);
-        __ sub(scratch, Immediate(stack_space));
+        __ sub(scratch, Immediate(static_cast<int32_t>(stack_space)));
         __ CompareStackLimit(scratch, StackLimitKind::kRealStackLimit);
         __ pop(scratch);
-        __ j(above_equal, &done, Label::kNear);
       }
-
-      if (v8_flags.wasm_growable_stacks) {
-        RegList regs_to_save;
-        regs_to_save.set(WasmHandleStackOverflowDescriptor::GapRegister());
-        regs_to_save.set(
-            WasmHandleStackOverflowDescriptor::FrameBaseRegister());
-        for (auto reg : wasm::kGpParamRegisters) regs_to_save.set(reg);
-        for (Register reg : base::Reversed(regs_to_save)) {
-          __ push(reg);
-        }
-        __ sub(esp,
-               Immediate(arraysize(wasm::kFpParamRegisters) * kSimd128Size));
-        for (size_t i = 0; i < arraysize(wasm::kFpParamRegisters); i++) {
-          __ Movdqu(Operand(esp, kSimd128Size * i), wasm::kFpParamRegisters[i]);
-        }
-        __ mov(WasmHandleStackOverflowDescriptor::GapRegister(),
-               Immediate(stack_space));
-        __ mov(WasmHandleStackOverflowDescriptor::FrameBaseRegister(), ebp);
-        __ add(WasmHandleStackOverflowDescriptor::FrameBaseRegister(),
-               Immediate(static_cast<int32_t>(
-                   call_descriptor->ParameterSlotCount() * kSystemPointerSize +
-                   CommonFrameConstants::kFixedFrameSizeAboveFp)));
-        __ wasm_call(static_cast<Address>(Builtin::kWasmHandleStackOverflow),
-                     RelocInfo::WASM_STUB_CALL);
-        // If the call successfully grew the stack, we don't expect it to have
-        // allocated any heap objects or otherwise triggered any GC.
-        // If it was not able to grow the stack, it may have triggered a GC when
-        // allocating the stack overflow exception object, but the call did not
-        // return in this case.
-        // So either way, we can just ignore any references and record an empty
-        // safepoint here.
-        ReferenceMap* reference_map = zone()->New<ReferenceMap>(zone());
-        RecordSafepoint(reference_map);
-        for (size_t i = 0; i < arraysize(wasm::kFpParamRegisters); i++) {
-          __ Movdqu(wasm::kFpParamRegisters[i], Operand(esp, kSimd128Size * i));
-        }
-        __ add(esp,
-               Immediate(arraysize(wasm::kFpParamRegisters) * kSimd128Size));
-        for (Register reg : regs_to_save) {
-          __ pop(reg);
-        }
-      } else {
-        __ wasm_call(static_cast<Address>(Builtin::kWasmStackOverflow),
-                     RelocInfo::WASM_STUB_CALL);
-        // The call does not return, hence we can ignore any references and just
-        // define an empty safepoint.
-        ReferenceMap* reference_map = zone()->New<ReferenceMap>(zone());
-        RecordSafepoint(reference_map);
-        __ AssertUnreachable(AbortReason::kUnexpectedReturnFromWasmTrap);
-      }
-      __ bind(&done);
+      __ j(above_equal, &done, Label::kNear);
     }
+
+    if (is_js_to_wasm) {
+      __ CallRuntime(Runtime::kThrowStackOverflow);
+      // RecordSafepointWithoutTaggedSlots is safe here because no tagged spill
+      // slots or parameters have been allocated on the stack frame yet.
+      RecordSafepointWithoutTaggedSlots();
+      __ AssertUnreachable(AbortReason::kUnexpectedReturnFromThrow);
+    } else if (v8_flags.wasm_growable_stacks) {
+      RegList regs_to_save;
+      regs_to_save.set(WasmHandleStackOverflowDescriptor::GapRegister());
+      regs_to_save.set(WasmHandleStackOverflowDescriptor::FrameBaseRegister());
+      for (auto reg : wasm::kGpParamRegisters) regs_to_save.set(reg);
+      for (Register reg : base::Reversed(regs_to_save)) {
+        __ push(reg);
+      }
+      __ sub(esp, Immediate(arraysize(wasm::kFpParamRegisters) * kSimd128Size));
+      for (size_t i = 0; i < arraysize(wasm::kFpParamRegisters); i++) {
+        __ Movdqu(Operand(esp, kSimd128Size * i), wasm::kFpParamRegisters[i]);
+      }
+      __ mov(WasmHandleStackOverflowDescriptor::GapRegister(),
+             Immediate(static_cast<int32_t>(stack_space)));
+      __ mov(WasmHandleStackOverflowDescriptor::FrameBaseRegister(), ebp);
+      __ add(WasmHandleStackOverflowDescriptor::FrameBaseRegister(),
+             Immediate(static_cast<int32_t>(
+                 call_descriptor->ParameterSlotCount() * kSystemPointerSize +
+                 CommonFrameConstants::kFixedFrameSizeAboveFp)));
+      __ wasm_call(static_cast<Address>(Builtin::kWasmHandleStackOverflow),
+                   RelocInfo::WASM_STUB_CALL);
+      // If the call successfully grew the stack, we don't expect it to have
+      // allocated any heap objects or otherwise triggered any GC.
+      // If it was not able to grow the stack, it may have triggered a GC when
+      // allocating the stack overflow exception object, but the call did not
+      // return in this case.
+      // So either way, we can just ignore any references and record an empty
+      // safepoint here.
+      RecordSafepointWithoutTaggedSlots();
+      for (size_t i = 0; i < arraysize(wasm::kFpParamRegisters); i++) {
+        __ Movdqu(wasm::kFpParamRegisters[i], Operand(esp, kSimd128Size * i));
+      }
+      __ add(esp, Immediate(arraysize(wasm::kFpParamRegisters) * kSimd128Size));
+      for (Register reg : regs_to_save) {
+        __ pop(reg);
+      }
+    } else {
+      __ wasm_call(static_cast<Address>(Builtin::kWasmStackOverflow),
+                   RelocInfo::WASM_STUB_CALL);
+      // The call does not return, hence we can ignore any references and just
+      // define an empty safepoint.
+      RecordSafepointWithoutTaggedSlots();
+      __ AssertUnreachable(AbortReason::kUnexpectedReturnFromWasmTrap);
+    }
+    __ bind(&done);
+  }
 #endif  // V8_ENABLE_WEBASSEMBLY
 
-    // Skip callee-saved and return slots, which are created below.
-    required_slots -= saves.Count();
-    required_slots -= frame()->GetReturnSlotCount();
-    if (required_slots > 0) {
-      __ AllocateStackSpace(required_slots * kSystemPointerSize);
-    }
+  // Skip callee-saved and return slots, which are created below.
+  required_slots -= saves.Count();
+  required_slots -= frame()->GetReturnSlotCount();
+  if (required_slots > 0) {
+    __ AllocateStackSpace(required_slots * kSystemPointerSize);
   }
 
   if (!saves.is_empty()) {  // Save callee-saved registers.

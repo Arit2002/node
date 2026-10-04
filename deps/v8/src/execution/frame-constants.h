@@ -373,6 +373,10 @@ class WasmJspiFrameConstants : public JSToWasmWrapperFrameConstants {
   //        |   spill slots   |                     | GC scan scan_count slots
   //        |      ....       | <- spill_slot_base--|
   //        |- - - - - - - - -|                     |
+  // After switching back to a parent stack, its wrapper buffer is no longer
+  // needed. Preserve the parent's return address in this untagged slot while
+  // fulfilling or rejecting the promise, which can reenter JSPI.
+  static constexpr int kParentReturnAddressOffset = kWrapperBufferOffset;
   // This slot contains the number of slots at the top of the frame that need to
   // be scanned by the GC.
   static constexpr int kGCScanSlotCountOffset =
@@ -497,13 +501,15 @@ class BuiltinExitFrameConstants : public ExitFrameConstants {
   static constexpr int kTargetIndex = 1;
   static constexpr int kArgcIndex = 2;
 
-  // This padding is required only on arm64 to keep the SP 16-byte aligned.
+  // This padding is required on arm64 (and x64 with 16-byte stack alignment) to
+  // keep the SP 16-byte aligned.
   static constexpr int kOptionalPaddingIndex = 3;
-#if V8_TARGET_ARCH_ARM64
+#if V8_TARGET_ARCH_ARM64 || \
+    (V8_TARGET_ARCH_X64 && V8_X64_16BYTE_STACK_ALIGNMENT_BOOL)
   static constexpr int kNumExtraArgs = 4;
 #else
   static constexpr int kNumExtraArgs = 3;
-#endif  // V8_TARGET_ARCH_ARM64
+#endif
 
   static constexpr int kNumExtraArgsWithReceiver = kNumExtraArgs + 1;
 

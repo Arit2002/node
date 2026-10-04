@@ -30,6 +30,7 @@ V8_EXPORT_PRIVATE constexpr Tagged<Smi>
 
 Tagged<Union<Smi, TrustedObject>> SharedFunctionInfo::GetTrustedData(
     IsolateForSandbox isolate) const {
+  if (HasUnpublishedTrustedData(isolate)) return Smi::zero();
   return TrustedPointerField::ReadMaybeEmptyTrustedPointerField<
       kTrustedDataIndirectPointerRange>(
       Tagged<HeapObject>(this),
@@ -46,42 +47,25 @@ uint32_t SharedFunctionInfo::Hash() {
   return static_cast<uint32_t>(base::hash_combine(start_pos, script_id));
 }
 
-void SharedFunctionInfo::Init(ReadOnlyRoots ro_roots, int unique_id) {
-  DisallowGarbageCollection no_gc;
-
-  // Set the function data to the "illegal" builtin. Ideally we'd use some sort
-  // of "uninitialized" marker here, but it's cheaper to use a valid builtin and
-  // avoid having to do uninitialized checks elsewhere.
-  set_builtin_id(Builtin::kIllegal);
-
-  // Set the name to the no-name sentinel, this can be updated later.
-  set_name_or_scope_info(SharedFunctionInfo::kNoSharedNameSentinel,
-                         kReleaseStore, SKIP_WRITE_BARRIER);
-
-  // Generally functions won't have feedback, unless they have been created
-  // from a FunctionLiteral. Those can just reset this field to keep the
-  // SharedFunctionInfo in a consistent state.
-  set_raw_outer_scope_info_or_feedback_metadata(ro_roots.the_hole_value(),
-                                                SKIP_WRITE_BARRIER);
-  set_script(ro_roots.undefined_value(), kReleaseStore, SKIP_WRITE_BARRIER);
-  set_function_literal_id(kInvalidInfoId, kRelaxedStore);
-  set_unique_id(unique_id);
-
-  // Set integer fields (smi or int, depending on the architecture).
-  set_length(0);
-  set_internal_formal_parameter_count(JSParameterCount(0));
-  set_expected_nof_properties(0);
-  set_raw_function_token_offset(0);
-
-  // All flags default to false or 0, except ConstructAsBuiltinBit just because
-  // we're using the kIllegal builtin.
-  set_flags(ConstructAsBuiltinBit::encode(true), kRelaxedStore);
-  set_flags2(0);
-
+SharedFunctionInfo::SharedFunctionInfo(const AllocationWitness& witness,
+                                       ReadOnlyRoots ro_roots, int unique_id)
+    : HeapObject(witness, ro_roots.shared_function_info_map()),
+      // Generally functions won't have feedback, unless they have been created
+      // from a FunctionLiteral. Those can just reset this field to keep the
+      // SharedFunctionInfo in a consistent state.
+      outer_scope_info_or_feedback_metadata_(witness, ro_roots.the_hole_value(),
+                                             SKIP_WRITE_BARRIER),
+      script_(witness, ro_roots.undefined_value(), SKIP_WRITE_BARRIER),
+      unique_id_(unique_id) {
   UpdateFunctionMapIndex();
+}
 
-  set_age(0);
-  set_feedback_slot(0);
+SharedFunctionInfo::SharedFunctionInfo(const AllocationWitness& witness,
+                                       ReadOnlyRoots ro_roots,
+                                       Tagged<SharedFunctionInfo> other,
+                                       IsolateForSandbox isolate)
+    : HeapObject(witness, ro_roots.shared_function_info_map()) {
+  CopyFrom(other, isolate);
 }
 
 // LINT.IfChange(GetSharedFunctionInfoCode)
@@ -114,14 +98,10 @@ Tagged<Code> SharedFunctionInfo::GetCode(Isolate* isolate) const {
       return isolate->builtins()->code(Builtin::kCompileLazy);
     }
 #if V8_ENABLE_WEBASSEMBLY
-    if (IsWasmExportedFunctionData(trusted_data)) {
-      // Having a WasmExportedFunctionData means the code is in there.
-      DCHECK(HasWasmExportedFunctionData(isolate));
-      return wasm_exported_function_data()->wrapper_code(isolate);
-    }
-    if (IsWasmCapiFunctionData(trusted_data)) {
-      return wasm_capi_function_data()->wrapper_code(isolate);
-    }
+    // Wasm functions (WasmExportedFunction and WasmCapiFunction) install their
+    // wrapper code directly into the JSDispatchTable at creation time (and on
+    // tier-up), rather than storing it on the SharedFunctionInfo.
+    CHECK(!IsWasmFunctionData(trusted_data));
 #endif  // V8_ENABLE_WEBASSEMBLY
   } else {
     DCHECK(HasUntrustedData());
@@ -222,17 +202,17 @@ void SharedFunctionInfo::SetScript(IsolateForSandbox isolate,
 
     // Remove shared function info from old script's list.
     Tagged<Script> old_script = Cast<Script>(script());
-
-    // Due to liveedit, it might happen that the old_script doesn't know
-    // about the SharedFunctionInfo, so we have to guard against that.
-    Tagged<WeakFixedArray> infos = old_script->infos();
-    if (static_cast<uint32_t>(function_literal_id) < infos->ulength().value()) {
-      Tagged<MaybeObject> raw = old_script->infos()->get(function_literal_id);
-      Tagged<HeapObject> heap_object;
-      if (raw.GetHeapObjectIfWeak(&heap_object) && heap_object == this) {
-        old_script->infos()->set(function_literal_id, roots.undefined_value());
-      }
+    Tagged<WeakFixedArray> list = old_script->infos();
+#ifdef DEBUG
+    DCHECK_LT(static_cast<uint32_t>(function_literal_id),
+              list->ulength().value());
+    Tagged<MaybeObject> maybe_object = list->get(function_literal_id);
+    Tagged<HeapObject> heap_object;
+    if (maybe_object.GetHeapObjectIfWeak(&heap_object)) {
+      DCHECK_EQ(heap_object, this);
     }
+#endif
+    list->set(function_literal_id, roots.undefined_value());
   }
 
   // Finally set new script.
@@ -607,7 +587,7 @@ void SharedFunctionInfo::InitFromFunctionLiteral(IsolateT* isolate,
     raw_sfi->set_is_toplevel(is_toplevel);
     DCHECK(IsTheHole(raw_sfi->outer_scope_info()));
     Scope* outer_scope = lit->scope()->GetOuterScopeWithContext();
-    if (outer_scope && (!is_toplevel || !outer_scope->is_script_scope())) {
+    if (outer_scope) {
       raw_sfi->set_outer_scope_info(*outer_scope->scope_info());
       raw_sfi->set_private_name_lookup_skips_outer_class(
           lit->scope()->private_name_lookup_skips_outer_class());
@@ -742,12 +722,9 @@ void SharedFunctionInfo::SetFunctionTokenPosition(int function_token_position,
 }
 
 int SharedFunctionInfo::StartPosition() const {
-  Tagged<Object> maybe_scope_info = name_or_scope_info(kAcquireLoad);
-  if (IsScopeInfo(maybe_scope_info)) {
-    Tagged<ScopeInfo> info = Cast<ScopeInfo>(maybe_scope_info);
-    if (info->HasPositionInfo()) {
-      return info->StartPosition();
-    }
+  if (Tagged<ScopeInfo> info;
+      TryCast(name_or_scope_info(kAcquireLoad), &info)) {
+    return info->StartPosition();
   }
   IsolateForSandbox isolate = GetCurrentIsolateForSandbox();
   if (HasUncompiledData(isolate)) {
@@ -781,12 +758,9 @@ int SharedFunctionInfo::StartPosition() const {
 }
 
 int SharedFunctionInfo::EndPosition() const {
-  Tagged<Object> maybe_scope_info = name_or_scope_info(kAcquireLoad);
-  if (IsScopeInfo(maybe_scope_info)) {
-    Tagged<ScopeInfo> info = Cast<ScopeInfo>(maybe_scope_info);
-    if (info->HasPositionInfo()) {
-      return info->EndPosition();
-    }
+  if (Tagged<ScopeInfo> info;
+      TryCast(name_or_scope_info(kAcquireLoad), &info)) {
+    return info->EndPosition();
   }
   IsolateForSandbox isolate = GetCurrentIsolateForSandbox();
   if (HasUncompiledData(isolate)) {
@@ -817,43 +791,6 @@ int SharedFunctionInfo::EndPosition() const {
   }
 #endif  // V8_ENABLE_WEBASSEMBLY
   return kNoSourcePosition;
-}
-
-void SharedFunctionInfo::UpdateFromFunctionLiteralForLiveEdit(
-    IsolateForSandbox isolate, FunctionLiteral* lit) {
-  Tagged<Object> maybe_scope_info = name_or_scope_info(kAcquireLoad);
-  // TODO(crbug.com/401059828): remove once crashes are gone.
-  set_live_edited(true);
-
-  if (IsScopeInfo(maybe_scope_info)) {
-    // Updating the ScopeInfo is safe since they are identical modulo
-    // source positions.
-    Tagged<ScopeInfo> new_scope_info = *lit->scope()->scope_info();
-    Tagged<ScopeInfo> old_scope_info = Cast<ScopeInfo>(maybe_scope_info);
-    DCHECK(new_scope_info->Equals(old_scope_info, true));
-    old_scope_info->SetPositionInfo(new_scope_info->position_info_start(),
-                                    new_scope_info->position_info_end());
-  } else if (!is_compiled()) {
-    CHECK(HasUncompiledData(isolate));
-    if (HasUncompiledDataWithPreparseData(isolate)) {
-      ClearPreparseData(isolate);
-    }
-    uncompiled_data(isolate)->set_start_position(lit->start_position());
-    uncompiled_data(isolate)->set_end_position(lit->end_position());
-
-    if (!is_toplevel()) {
-      Scope* outer_scope = lit->scope()->GetOuterScopeWithContext();
-      if (outer_scope) {
-        // Use the raw accessor since we have to replace the existing outer
-        // scope.
-        set_raw_outer_scope_info_or_feedback_metadata(
-            *outer_scope->scope_info());
-      }
-    }
-  }
-  SetFunctionTokenPosition(lit->function_token_position(),
-                           lit->start_position());
-  set_is_hoisted_in_context(lit->scope()->is_hoisted_in_context());
 }
 
 CachedTieringDecision SharedFunctionInfo::cached_tiering_decision() {
@@ -928,12 +865,7 @@ void SharedFunctionInfo::UninstallDebugBytecode(
 
 // static
 void SharedFunctionInfo::EnsureOldForTesting(Tagged<SharedFunctionInfo> sfi) {
-  if (v8_flags.flush_code_based_on_time ||
-      v8_flags.flush_code_based_on_tab_visibility) {
-    sfi->set_age(kMaxAge);
-  } else {
-    sfi->set_age(v8_flags.bytecode_old_age);
-  }
+  sfi->set_age(kMaxAge);
 }
 
 #ifdef DEBUG
@@ -942,6 +874,7 @@ bool SharedFunctionInfo::UniqueIdsAreUnique(Isolate* isolate) {
   std::unordered_set<uint32_t> ids({isolate->next_unique_sfi_id()});
   CombinedHeapObjectIterator it(isolate->heap());
   for (Tagged<HeapObject> o = it.Next(); !o.is_null(); o = it.Next()) {
+    if (IsInaccessible(o)) continue;
     if (!IsSharedFunctionInfo(o)) continue;
     auto result = ids.emplace(Cast<SharedFunctionInfo>(o)->unique_id());
     // If previously inserted...

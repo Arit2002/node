@@ -116,6 +116,14 @@ IGNITION_HANDLER(LdaTheHole, InterpreterAssembler) {
   Dispatch();
 }
 
+// LdaTdzHole
+//
+// Load TdzHole into the accumulator.
+IGNITION_HANDLER(LdaTdzHole, InterpreterAssembler) {
+  SetAccumulator(TdzHoleConstant());
+  Dispatch();
+}
+
 // LdaTrue
 //
 // Load True into the accumulator.
@@ -1276,20 +1284,21 @@ IGNITION_HANDLER(BitwiseAndSmi, InterpreterBitwiseBinaryOpAssembler) {
 
 #ifndef V8_ENABLE_EXPERIMENTAL_TSA_BUILTINS
 
-// BitwiseNot <feedback_slot>
+// BitwiseNot <feedback_index>
 //
 // Perform bitwise-not on the accumulator.
 IGNITION_HANDLER(BitwiseNot, InterpreterAssembler) {
   TNode<Object> value = GetAccumulator();
   TNode<Context> context = GetContext();
-  TNode<UintPtrT> slot_index = BytecodeOperandFeedbackSlot(0);
-  TNode<Union<FeedbackVector, Undefined>> maybe_feedback_vector =
-      LoadFeedbackVectorOrUndefinedIfJitless();
-  static constexpr UpdateFeedbackMode mode = DefaultUpdateFeedbackMode();
+  TNode<BytecodeArray> bytecode_array = BytecodeArrayTaggedPointer();
+  TNode<IntPtrT> feedback_offset =
+      BytecodeOperandOffset(kUnaryEmbeddedFeedbackOperandIndex);
 
   UnaryOpAssembler unary_op_asm(state());
   TNode<Object> result = unary_op_asm.Generate_BitwiseNotWithFeedback(
-      context, value, slot_index, maybe_feedback_vector, mode);
+      context, value,
+      unary_op_asm.MakeEmbeddedFeedbackUpdater(bytecode_array,
+                                               feedback_offset));
 
   SetAccumulator(result);
   Dispatch();
@@ -1324,20 +1333,21 @@ IGNITION_HANDLER(ShiftRightLogicalSmi, InterpreterBitwiseBinaryOpAssembler) {
   BitwiseBinarySmiOpWithEmbeddedFeedback(Operation::kShiftRightLogical);
 }
 
-// Negate <feedback_slot>
+// Negate <feedback_index>
 //
 // Perform arithmetic negation on the accumulator.
 IGNITION_HANDLER(Negate, InterpreterAssembler) {
   TNode<Object> value = GetAccumulator();
   TNode<Context> context = GetContext();
-  TNode<UintPtrT> slot_index = BytecodeOperandFeedbackSlot(0);
-  TNode<Union<FeedbackVector, Undefined>> maybe_feedback_vector =
-      LoadFeedbackVectorOrUndefinedIfJitless();
-  static constexpr UpdateFeedbackMode mode = DefaultUpdateFeedbackMode();
+  TNode<BytecodeArray> bytecode_array = BytecodeArrayTaggedPointer();
+  TNode<IntPtrT> feedback_offset =
+      BytecodeOperandOffset(kUnaryEmbeddedFeedbackOperandIndex);
 
   UnaryOpAssembler unary_op_asm(state());
   TNode<Object> result = unary_op_asm.Generate_NegateWithFeedback(
-      context, value, slot_index, maybe_feedback_vector, mode);
+      context, value,
+      unary_op_asm.MakeEmbeddedFeedbackUpdater(bytecode_array,
+                                               feedback_offset));
 
   SetAccumulator(result);
   Dispatch();
@@ -1410,39 +1420,41 @@ IGNITION_HANDLER(ToBoolean, InterpreterAssembler) {
   Dispatch();
 }
 
-// Inc
+// Inc <feedback_index>
 //
 // Increments value in the accumulator by one.
 IGNITION_HANDLER(Inc, InterpreterAssembler) {
   TNode<Object> value = GetAccumulator();
   TNode<Context> context = GetContext();
-  TNode<UintPtrT> slot_index = BytecodeOperandFeedbackSlot(0);
-  TNode<Union<FeedbackVector, Undefined>> maybe_feedback_vector =
-      LoadFeedbackVectorOrUndefinedIfJitless();
-  static constexpr UpdateFeedbackMode mode = DefaultUpdateFeedbackMode();
+  TNode<BytecodeArray> bytecode_array = BytecodeArrayTaggedPointer();
+  TNode<IntPtrT> feedback_offset =
+      BytecodeOperandOffset(kUnaryEmbeddedFeedbackOperandIndex);
 
   UnaryOpAssembler unary_op_asm(state());
   TNode<Object> result = unary_op_asm.Generate_IncrementWithFeedback(
-      context, value, slot_index, maybe_feedback_vector, mode);
+      context, value,
+      unary_op_asm.MakeEmbeddedFeedbackUpdater(bytecode_array,
+                                               feedback_offset));
 
   SetAccumulator(result);
   Dispatch();
 }
 
-// Dec
+// Dec <feedback_index>
 //
 // Decrements value in the accumulator by one.
 IGNITION_HANDLER(Dec, InterpreterAssembler) {
   TNode<Object> value = GetAccumulator();
   TNode<Context> context = GetContext();
-  TNode<UintPtrT> slot_index = BytecodeOperandFeedbackSlot(0);
-  TNode<Union<FeedbackVector, Undefined>> maybe_feedback_vector =
-      LoadFeedbackVectorOrUndefinedIfJitless();
-  static constexpr UpdateFeedbackMode mode = DefaultUpdateFeedbackMode();
+  TNode<BytecodeArray> bytecode_array = BytecodeArrayTaggedPointer();
+  TNode<IntPtrT> feedback_offset =
+      BytecodeOperandOffset(kUnaryEmbeddedFeedbackOperandIndex);
 
   UnaryOpAssembler unary_op_asm(state());
   TNode<Object> result = unary_op_asm.Generate_DecrementWithFeedback(
-      context, value, slot_index, maybe_feedback_vector, mode);
+      context, value,
+      unary_op_asm.MakeEmbeddedFeedbackUpdater(bytecode_array,
+                                               feedback_offset));
 
   SetAccumulator(result);
   Dispatch();
@@ -3109,14 +3121,17 @@ IGNITION_HANDLER(Return, InterpreterAssembler) {
   Return(accumulator);
 }
 
-// ThrowReferenceErrorIfHole <variable_name>
+// ThrowReferenceErrorIfTdzHole <variable_name>
 //
-// Throws an exception if the value in the accumulator is TheHole.
-IGNITION_HANDLER(ThrowReferenceErrorIfHole, InterpreterAssembler) {
+// Throws an exception if the value in the accumulator is TdzHole.
+IGNITION_HANDLER(ThrowReferenceErrorIfTdzHole, InterpreterAssembler) {
   TNode<Object> value = GetAccumulator();
+#ifdef V8_ENABLE_TDZ_HOLE
+  CSA_DCHECK(this, TaggedNotEqual(value, TheHoleConstant()));
+#endif
 
   Label throw_error(this, Label::kDeferred);
-  GotoIf(TaggedEqual(value, TheHoleConstant()), &throw_error);
+  GotoIf(TaggedEqual(value, TdzHoleConstant()), &throw_error);
   Dispatch();
 
   BIND(&throw_error);
@@ -3130,14 +3145,17 @@ IGNITION_HANDLER(ThrowReferenceErrorIfHole, InterpreterAssembler) {
   }
 }
 
-// ThrowSuperNotCalledIfHole
+// ThrowSuperNotCalledIfTdzHole
 //
-// Throws an exception if the value in the accumulator is TheHole.
-IGNITION_HANDLER(ThrowSuperNotCalledIfHole, InterpreterAssembler) {
+// Throws an exception if the value in the accumulator is TdzHole.
+IGNITION_HANDLER(ThrowSuperNotCalledIfTdzHole, InterpreterAssembler) {
   TNode<Object> value = GetAccumulator();
+#ifdef V8_ENABLE_TDZ_HOLE
+  CSA_DCHECK(this, TaggedNotEqual(value, TheHoleConstant()));
+#endif
 
   Label throw_error(this, Label::kDeferred);
-  GotoIf(TaggedEqual(value, TheHoleConstant()), &throw_error);
+  GotoIf(TaggedEqual(value, TdzHoleConstant()), &throw_error);
   Dispatch();
 
   BIND(&throw_error);
@@ -3149,15 +3167,18 @@ IGNITION_HANDLER(ThrowSuperNotCalledIfHole, InterpreterAssembler) {
   }
 }
 
-// ThrowSuperAlreadyCalledIfNotHole
+// ThrowSuperAlreadyCalledIfNotTdzHole
 //
 // Throws SuperAlreadyCalled exception if the value in the accumulator is not
-// TheHole.
-IGNITION_HANDLER(ThrowSuperAlreadyCalledIfNotHole, InterpreterAssembler) {
+// TdzHole.
+IGNITION_HANDLER(ThrowSuperAlreadyCalledIfNotTdzHole, InterpreterAssembler) {
   TNode<Object> value = GetAccumulator();
+#ifdef V8_ENABLE_TDZ_HOLE
+  CSA_DCHECK(this, TaggedNotEqual(value, TheHoleConstant()));
+#endif
 
   Label throw_error(this, Label::kDeferred);
-  GotoIf(TaggedNotEqual(value, TheHoleConstant()), &throw_error);
+  GotoIf(TaggedNotEqual(value, TdzHoleConstant()), &throw_error);
   Dispatch();
 
   BIND(&throw_error);

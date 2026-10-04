@@ -34,11 +34,13 @@ FieldAccess AccessBuilder::ForExternalIntPtr() {
 }
 
 // static
-FieldAccess AccessBuilder::ForMap(WriteBarrierKind write_barrier) {
+FieldAccess AccessBuilder::ForMap(WriteBarrierKind write_barrier,
+                                  SharedFlag shared_base) {
   FieldAccess access = {kTaggedBase,           offsetof(HeapObject, map_),
                         MaybeHandle<Name>(),   OptionalMapRef(),
                         Type::OtherInternal(), MachineType::MapInHeader(),
                         write_barrier,         "Map"};
+  access.shared_base = shared_base;
   return access;
 }
 
@@ -324,6 +326,7 @@ FieldAccess AccessBuilder::ForJSFunctionSharedFunctionInfo() {
       Handle<Name>(),        OptionalMapRef(),
       Type::OtherInternal(), MachineType::TaggedPointer(),
       kPointerWriteBarrier,  "JSFunctionSharedFunctionInfo"};
+  access.is_immutable = true;
   return access;
 }
 
@@ -334,8 +337,8 @@ FieldAccess AccessBuilder::ForJSFunctionFeedbackCell() {
       Handle<Name>(),       OptionalMapRef(),
       Type::Internal(),     MachineType::TaggedPointer(),
       kPointerWriteBarrier, "JSFunctionFeedbackCell"};
-  // The feedback cell is only set when the JSFunction is allocated, or via
-  // LiveEdit, but that doesn't concern optimized code, so treat it as const.
+  // The feedback cell is only set when the JSFunction is allocated, so treat
+  // it as const.
   access.is_immutable = true;
   return access;
 }
@@ -413,10 +416,10 @@ FieldAccess AccessBuilder::ForJSGeneratorObjectFunction() {
 // static
 FieldAccess AccessBuilder::ForJSGeneratorObjectReceiver() {
   FieldAccess access = {
-      kTaggedBase,          offsetof(JSGeneratorObject, receiver_),
-      Handle<Name>(),       OptionalMapRef(),
-      Type::Internal(),     MachineType::AnyTagged(),
-      kPointerWriteBarrier, "JSGeneratorObjectReceiver"};
+      kTaggedBase,       offsetof(JSGeneratorObject, receiver_),
+      Handle<Name>(),    OptionalMapRef(),
+      Type::Any(),       MachineType::AnyTagged(),
+      kFullWriteBarrier, "JSGeneratorObjectReceiver"};
   return access;
 }
 

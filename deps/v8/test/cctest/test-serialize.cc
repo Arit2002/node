@@ -57,6 +57,7 @@
 #include "src/numbers/hash-seed-inl.h"
 #include "src/objects/js-array-buffer-inl.h"
 #include "src/objects/js-regexp-inl.h"
+#include "src/objects/object-conversions-inl.h"
 #include "src/objects/objects-inl.h"
 #include "src/runtime/runtime.h"
 #include "src/snapshot/code-serializer.h"
@@ -73,6 +74,8 @@
 #include "test/cctest/cctest.h"
 #include "test/cctest/heap/heap-utils.h"
 #include "test/cctest/setup-isolate-for-tests.h"
+#include "test/common/flag-utils.h"
+#include "test/common/version-utils.h"
 namespace v8 {
 namespace internal {
 
@@ -208,15 +211,13 @@ StartupBlobs Serialize(v8::Isolate* isolate) {
     i_isolate->read_only_heap()->OnCreateHeapObjectsComplete(i_isolate);
   }
 
-  ReadOnlySerializer read_only_serializer(i_isolate,
-                                          Snapshot::kDefaultSerializerFlags);
+  Snapshot::SerializerFlags flags(Snapshot::kAllowSerializingAllTrustedObjects);
+  ReadOnlySerializer read_only_serializer(i_isolate, flags);
   read_only_serializer.Serialize();
 
-  SharedHeapSerializer shared_space_serializer(
-      i_isolate, Snapshot::kDefaultSerializerFlags);
+  SharedHeapSerializer shared_space_serializer(i_isolate, flags);
 
-  StartupSerializer ser(i_isolate, Snapshot::kDefaultSerializerFlags,
-                        &shared_space_serializer);
+  StartupSerializer ser(i_isolate, flags, &shared_space_serializer);
   ser.SerializeStrongReferences(no_gc);
 
   ser.SerializeWeakReferencesAndDeferred();
@@ -427,22 +428,22 @@ static void SerializeContext(base::Vector<const uint8_t>* startup_blob_out,
       isolate->read_only_heap()->OnCreateHeapObjectsComplete(isolate);
     }
 
+    Snapshot::SerializerFlags flags(
+        Snapshot::kAllowSerializingAllTrustedObjects);
     SnapshotByteSink read_only_sink;
-    ReadOnlySerializer read_only_serializer(isolate,
-                                            Snapshot::kDefaultSerializerFlags);
+    ReadOnlySerializer read_only_serializer(isolate, flags);
     read_only_serializer.Serialize();
 
-    SharedHeapSerializer shared_space_serializer(
-        isolate, Snapshot::kDefaultSerializerFlags);
+    SharedHeapSerializer shared_space_serializer(isolate, flags);
 
     SnapshotByteSink startup_sink;
-    StartupSerializer startup_serializer(
-        isolate, Snapshot::kDefaultSerializerFlags, &shared_space_serializer);
+    StartupSerializer startup_serializer(isolate, flags,
+                                         &shared_space_serializer);
     startup_serializer.SerializeStrongReferences(no_gc);
 
     SnapshotByteSink context_sink;
     ContextSerializer context_serializer(
-        isolate, Snapshot::kDefaultSerializerFlags, &startup_serializer,
+        isolate, flags, &startup_serializer,
         SerializeEmbedderFieldsCallback(v8::SerializeInternalFieldsCallback()));
     context_serializer.Serialize(&raw_context, no_gc);
 
@@ -621,23 +622,22 @@ static void SerializeCustomContext(
         i_isolate->read_only_heap()->OnCreateHeapObjectsComplete(i_isolate);
       }
 
+      Snapshot::SerializerFlags flags(
+          Snapshot::kAllowSerializingAllTrustedObjects);
       SnapshotByteSink read_only_sink;
-      ReadOnlySerializer read_only_serializer(
-          i_isolate, Snapshot::kDefaultSerializerFlags);
+      ReadOnlySerializer read_only_serializer(i_isolate, flags);
       read_only_serializer.Serialize();
 
-      SharedHeapSerializer shared_space_serializer(
-          i_isolate, Snapshot::kDefaultSerializerFlags);
+      SharedHeapSerializer shared_space_serializer(i_isolate, flags);
 
       SnapshotByteSink startup_sink;
-      StartupSerializer startup_serializer(i_isolate,
-                                           Snapshot::kDefaultSerializerFlags,
+      StartupSerializer startup_serializer(i_isolate, flags,
                                            &shared_space_serializer);
       startup_serializer.SerializeStrongReferences(no_gc);
 
       SnapshotByteSink context_sink;
       ContextSerializer context_serializer(
-          i_isolate, Snapshot::kDefaultSerializerFlags, &startup_serializer,
+          i_isolate, flags, &startup_serializer,
           SerializeEmbedderFieldsCallback(
               v8::SerializeInternalFieldsCallback()));
       context_serializer.Serialize(&raw_context, no_gc);
@@ -2905,6 +2905,81 @@ TEST(CodeSerializerExternalString) {
   delete cache;
 }
 
+namespace {
+
+// The addresses of these resources are registered as API external references
+// below, so that ObjectSerializer::SerializeExternalString() takes the "known
+// resource" path for the strings backed by them. This is the state an embedder
+// ends up in when it externalizes strings it also hands to the compiler, e.g.
+// builtin module sources that are later turned into a code cache.
+constexpr char kExternalCodeCacheSource[] =
+    "function f() { return 'abc'; }; f() + 'def';";
+constexpr char kExternalCodeCacheName[] = "external-script-name";
+
+SerializerOneByteResource external_code_cache_source_resource(
+    kExternalCodeCacheSource, sizeof(kExternalCodeCacheSource) - 1);
+SerializerOneByteResource external_code_cache_name_resource(
+    kExternalCodeCacheName, sizeof(kExternalCodeCacheName) - 1);
+
+const intptr_t external_code_cache_references[] = {
+    reinterpret_cast<intptr_t>(&external_code_cache_source_resource),
+    reinterpret_cast<intptr_t>(&external_code_cache_name_resource), 0};
+
+}  // namespace
+
+// Serializing a live cached ExternalString must leave its resource_data_
+// (cached data pointer) external pointer handle intact, so that reads of the
+// string's characters from generated code keep working afterwards.
+UNINITIALIZED_TEST(CodeSerializerExternalStringResourceDataRestored) {
+  v8::Isolate::CreateParams create_params;
+  create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
+  create_params.external_references = external_code_cache_references;
+  v8::Isolate* isolate = v8::Isolate::New(create_params);
+  {
+    v8::Isolate::Scope isolate_scope(isolate);
+    v8::HandleScope scope(isolate);
+    v8::Local<v8::Context> context = v8::Context::New(isolate);
+    v8::Context::Scope context_scope(context);
+
+    v8::Local<v8::String> source_string =
+        v8::String::NewExternalOneByte(isolate,
+                                       &external_code_cache_source_resource)
+            .ToLocalChecked();
+    v8::Local<v8::String> name_string =
+        v8::String::NewExternalOneByte(isolate,
+                                       &external_code_cache_name_resource)
+            .ToLocalChecked();
+    // Only cached external strings have a resource_data_ field.
+    CHECK(!Cast<ExternalString>(*Utils::OpenDirectHandle(*source_string))
+               ->is_uncached());
+    CHECK(!Cast<ExternalString>(*Utils::OpenDirectHandle(*name_string))
+               ->is_uncached());
+
+    v8::ScriptCompiler::Source source(source_string, {name_string});
+    v8::Local<v8::UnboundScript> script =
+        v8::ScriptCompiler::CompileUnboundScript(
+            isolate, &source, v8::ScriptCompiler::kEagerCompile)
+            .ToLocalChecked();
+
+    // Serializes the script name in every build, and additionally the script
+    // source in DEBUG builds - CodeSerializer::Serialize() only attaches the
+    // source instead of serializing it when DEBUG is not defined. Both strings
+    // stay live in this isolate afterwards.
+    std::unique_ptr<v8::ScriptCompiler::CachedData> cache(
+        v8::ScriptCompiler::CreateCodeCache(script));
+    CHECK(cache);
+
+    // Read the character data of both strings from generated code.
+    v8::Local<v8::Object> global = context->Global();
+    CHECK(global->Set(context, v8_str("source"), source_string).FromJust());
+    CHECK(global->Set(context, v8_str("name"), name_string).FromJust());
+    ExpectTrue("source.startsWith('function f()')");
+    ExpectTrue("source.indexOf('def') > 0");
+    ExpectTrue("name.startsWith('external-script')");
+  }
+  isolate->Dispose();
+}
+
 TEST(CodeSerializerLargeExternalString) {
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
@@ -3034,15 +3109,12 @@ static void SerializerLogEventListener(const v8::JitCodeEvent* event) {
 }
 
 v8::ScriptCompiler::CachedData* CompileRunAndProduceCache(
-    const char* js_source, CodeCacheType cacheType = CodeCacheType::kLazy) {
+    v8::Isolate* isolate, const char* js_source, CodeCacheType cacheType) {
   v8::ScriptCompiler::CachedData* cache;
-  v8::Isolate::CreateParams create_params;
-  create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
-  v8::Isolate* isolate1 = v8::Isolate::New(create_params);
   {
-    v8::Isolate::Scope iscope(isolate1);
-    v8::HandleScope scope(isolate1);
-    v8::Local<v8::Context> context = v8::Context::New(isolate1);
+    v8::Isolate::Scope iscope(isolate);
+    v8::HandleScope scope(isolate);
+    v8::Local<v8::Context> context = v8::Context::New(isolate);
     v8::Context::Scope context_scope(context);
 
     v8::Local<v8::String> source_str = v8_str(js_source);
@@ -3061,7 +3133,7 @@ v8::ScriptCompiler::CachedData* CompileRunAndProduceCache(
         UNREACHABLE();
     }
     v8::Local<v8::UnboundScript> script =
-        v8::ScriptCompiler::CompileUnboundScript(isolate1, &source, options)
+        v8::ScriptCompiler::CompileUnboundScript(isolate, &source, options)
             .ToLocalChecked();
 
     if (cacheType != CodeCacheType::kAfterExecute) {
@@ -3069,11 +3141,11 @@ v8::ScriptCompiler::CachedData* CompileRunAndProduceCache(
     }
 
     v8::Local<v8::Value> result = script->BindToCurrentContext()
-                                      ->Run(isolate1->GetCurrentContext())
+                                      ->Run(isolate->GetCurrentContext())
                                       .ToLocalChecked();
     v8::Local<v8::String> result_string =
-        result->ToString(isolate1->GetCurrentContext()).ToLocalChecked();
-    CHECK(result_string->Equals(isolate1->GetCurrentContext(), v8_str("abcdef"))
+        result->ToString(isolate->GetCurrentContext()).ToLocalChecked();
+    CHECK(result_string->Equals(isolate->GetCurrentContext(), v8_str("abcdef"))
               .FromJust());
 
     if (cacheType == CodeCacheType::kAfterExecute) {
@@ -3081,6 +3153,16 @@ v8::ScriptCompiler::CachedData* CompileRunAndProduceCache(
     }
     CHECK(cache);
   }
+  return cache;
+}
+
+v8::ScriptCompiler::CachedData* CompileRunAndProduceCache(
+    const char* js_source, CodeCacheType cacheType = CodeCacheType::kLazy) {
+  v8::Isolate::CreateParams create_params;
+  create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
+  v8::Isolate* isolate1 = v8::Isolate::New(create_params);
+  v8::ScriptCompiler::CachedData* cache =
+      CompileRunAndProduceCache(isolate1, js_source, cacheType);
   isolate1->Dispose();
   return cache;
 }
@@ -3381,6 +3463,42 @@ TEST(CachedDataCompatibilityCheck) {
   }
 }
 
+TEST(CodeSerializerEmbedderString) {
+  const char* js_source = "function f() { return 'abc'; }; f() + 'def'";
+  std::unique_ptr<v8::ScriptCompiler::CachedData> empty_embedder_cache;
+  std::unique_ptr<v8::ScriptCompiler::CachedData> custom_embedder_cache;
+
+  v8::Isolate::CreateParams create_params;
+  create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
+  v8::Isolate* isolate = v8::Isolate::New(create_params);
+
+  {
+    ScopedVersionEmbedderString embedder("");
+    empty_embedder_cache.reset(
+        CompileRunAndProduceCache(isolate, js_source, CodeCacheType::kLazy));
+    CHECK_EQ(empty_embedder_cache->CompatibilityCheck(isolate),
+             v8::ScriptCompiler::CachedData::kSuccess);
+  }
+
+  {
+    ScopedVersionEmbedderString embedder("-test");
+    CHECK_EQ(empty_embedder_cache->CompatibilityCheck(isolate),
+             v8::ScriptCompiler::CachedData::kVersionMismatch);
+    custom_embedder_cache.reset(
+        CompileRunAndProduceCache(isolate, js_source, CodeCacheType::kLazy));
+    CHECK_EQ(custom_embedder_cache->CompatibilityCheck(isolate),
+             v8::ScriptCompiler::CachedData::kSuccess);
+  }
+
+  {
+    ScopedVersionEmbedderString embedder("-test.2");
+    CHECK_EQ(custom_embedder_cache->CompatibilityCheck(isolate),
+             v8::ScriptCompiler::CachedData::kVersionMismatch);
+  }
+
+  isolate->Dispose();
+}
+
 TEST(CodeSerializerBitFlip) {
   i::v8_flags.verify_snapshot_checksum = true;
   const char* js_source = "function f() { return 'abc'; }; f() + 'def'";
@@ -3666,11 +3784,11 @@ int serialized_static_field = 314;
 
 void SerializedCallback(const v8::FunctionCallbackInfo<v8::Value>& info) {
   CHECK(i::ValidateCallbackInfo(info));
-  if (info.Data()->IsExternal()) {
-    CHECK_EQ(info.Data().As<v8::External>()->Value(kIntPointerTag),
+  if (info.DataV2()->IsValue() && info.DataV2().As<v8::Value>()->IsExternal()) {
+    CHECK_EQ(info.DataV2().As<v8::External>()->Value(kIntPointerTag),
              static_cast<void*>(&serialized_static_field));
     int* value = reinterpret_cast<int*>(
-        info.Data().As<v8::External>()->Value(kIntPointerTag));
+        info.DataV2().As<v8::External>()->Value(kIntPointerTag));
     (*value)++;
   }
   info.GetReturnValue().Set(v8_num(42));
@@ -4670,18 +4788,10 @@ UNINITIALIZED_TEST(SerializeContextData) {
         v8::Local<v8::Context> context =
             v8::Context::FromSnapshot(isolate, 0).ToLocalChecked();
         CHECK_NULL(context->GetAlignedPointerFromEmbedderData(0, kRawDataTag));
-        // It would be more consistent if the API would always null out pointers
-        // stored in embedder slots (if no custom serializer/deserializer is
-        // provided), but in the wide pointer case we don't actually know
-        // whether it's a pointer or a Smi, so we just let these values pass
-        // through.
-        if (V8_ENABLE_SANDBOX_BOOL) {
-          CHECK_NULL(
-              context->GetAlignedPointerFromEmbedderData(1, kRawDataTag));
-        } else {
-          CHECK_EQ(raw_data,
-                   context->GetAlignedPointerFromEmbedderData(1, kRawDataTag));
-        }
+        // Embedder pointers stored in embedder slots are always cleared during
+        // snapshot serialization if no custom serializer/deserializer is
+        // provided.
+        CHECK_NULL(context->GetAlignedPointerFromEmbedderData(1, kRawDataTag));
       }
       isolate->Dispose();
     }
@@ -4759,11 +4869,9 @@ UNINITIALIZED_TEST(SerializeApiWrapperData) {
           object_template->NewInstance(context).ToLocalChecked();
       wrappable1 = cppgc::MakeGarbageCollected<DummyWrappable>(
           cpp_heap->GetAllocationHandle());
-      v8::Object::Wrap<v8::CppHeapPointerTag::kTagForTesting>(isolate, obj1,
-                                                              wrappable1);
-      CHECK_EQ(
-          wrappable1,
-          v8::Object::Unwrap<CppHeapPointerTag::kTagForTesting>(isolate, obj1));
+      v8::Object::Wrap<i::kTagForTesting>(isolate, obj1, wrappable1);
+      CHECK_EQ(wrappable1,
+               v8::Object::Unwrap<i::kTagForTesting>(isolate, obj1));
       CHECK(context->Global()->Set(context, v8_str("obj1"), obj1).FromJust());
 
       v8::Local<v8::Object> obj2 =
@@ -4771,11 +4879,9 @@ UNINITIALIZED_TEST(SerializeApiWrapperData) {
       wrappable2 = cppgc::MakeGarbageCollected<DummyWrappable>(
           cpp_heap->GetAllocationHandle());
       wrappable2->is_special = true;
-      v8::Object::Wrap<v8::CppHeapPointerTag::kTagForTesting>(isolate, obj2,
-                                                              wrappable2);
-      CHECK_EQ(
-          wrappable2,
-          v8::Object::Unwrap<CppHeapPointerTag::kTagForTesting>(isolate, obj2));
+      v8::Object::Wrap<i::kTagForTesting>(isolate, obj2, wrappable2);
+      CHECK_EQ(wrappable2,
+               v8::Object::Unwrap<i::kTagForTesting>(isolate, obj2));
       CHECK(context->Global()->Set(context, v8_str("obj2"), obj2).FromJust());
 
       creator.SetDefaultContext(context, SerializeInternalFieldsCallback(),
@@ -6574,6 +6680,276 @@ TEST(InvalidCachedCompileFunction) {
     // Check that the cached data with wrapped arguments is rejected.
     CHECK(script_source.GetCachedData()->rejected);
     delete script_cache;
+  }
+}
+
+TEST(CodeCacheSha256SourceHash) {
+  LocalContext env;
+  v8::Isolate* isolate = env.isolate();
+  i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
+  i_isolate->compilation_cache()->DisableScriptAndEval();
+
+  v8::HandleScope scope(isolate);
+
+  // 1. Direct unit checks on SourceHash with SHA256 flag enabled.
+  {
+    FlagScope<bool> flag_scope(&v8_flags.code_cache_source_hash_sha256, true);
+
+    // Use a 600-character string (> ConsString::kMinLength == 13) so
+    // ConsString flattening and SlicedString handling are exercised.
+    static constexpr int kPartLength = 300;
+    static constexpr int kTotalLength = kPartLength * 2;
+    std::string part1_ascii(kPartLength, 'a');
+    std::string part2_ascii(kPartLength, 'b');
+    for (int i = 0; i < kPartLength; ++i) {
+      part1_ascii[i] = static_cast<char>('a' + (i % 26));
+      part2_ascii[i] = static_cast<char>('A' + (i % 26));
+    }
+    std::string full_ascii = part1_ascii + part2_ascii;
+
+    Handle<String> one_byte =
+        i_isolate->factory()->NewStringFromAsciiChecked(full_ascii.c_str());
+    CHECK(one_byte->IsOneByteRepresentation());
+
+    std::vector<uint16_t> two_byte_data(kTotalLength);
+    for (int i = 0; i < kTotalLength; ++i) {
+      two_byte_data[i] = static_cast<uint16_t>(full_ascii[i]);
+    }
+    Handle<String> two_byte = i_isolate->factory()
+                                  ->NewRawTwoByteString(kTotalLength)
+                                  .ToHandleChecked();
+    {
+      DisallowGarbageCollection no_gc;
+      CopyChars(Cast<SeqTwoByteString>(*two_byte)->GetChars(no_gc),
+                two_byte_data.data(), kTotalLength);
+    }
+    CHECK(!two_byte->IsOneByteRepresentation());
+
+    Handle<String> part1 =
+        i_isolate->factory()->NewStringFromAsciiChecked(part1_ascii.c_str());
+    Handle<String> part2 =
+        i_isolate->factory()->NewStringFromAsciiChecked(part2_ascii.c_str());
+    Handle<String> cons =
+        i_isolate->factory()->NewConsString(part1, part2).ToHandleChecked();
+    CHECK(IsConsString(*cons));
+    CHECK(!cons->IsFlat());
+
+    // ConsString with mixed one-byte and two-byte leaves flattens to two-byte.
+    Handle<String> two_byte_part2 = i_isolate->factory()
+                                        ->NewRawTwoByteString(kPartLength)
+                                        .ToHandleChecked();
+    {
+      DisallowGarbageCollection no_gc;
+      CopyChars(Cast<SeqTwoByteString>(*two_byte_part2)->GetChars(no_gc),
+                two_byte_data.data() + kPartLength, kPartLength);
+    }
+    Handle<String> cons_mixed = i_isolate->factory()
+                                    ->NewConsString(part1, two_byte_part2)
+                                    .ToHandleChecked();
+    CHECK(IsConsString(*cons_mixed));
+    CHECK(!cons_mixed->IsFlat());
+
+    // SlicedString representation of the same content.
+    std::string padded_ascii = "0123456789" + full_ascii + "9876543210";
+    Handle<String> padded =
+        i_isolate->factory()->NewStringFromAsciiChecked(padded_ascii.c_str());
+    Handle<String> sliced =
+        i_isolate->factory()->NewProperSubString(padded, 10, 10 + kTotalLength);
+    CHECK(IsSlicedString(*sliced));
+
+    Handle<FixedArray> empty_wrapped_arguments;
+    ScriptOriginOptions default_origin_options;
+
+    SerializedCodeData::SourceHash hash_one_byte(
+        one_byte, empty_wrapped_arguments, default_origin_options, i_isolate);
+    SerializedCodeData::SourceHash hash_two_byte(
+        two_byte, empty_wrapped_arguments, default_origin_options, i_isolate);
+    SerializedCodeData::SourceHash hash_cons(cons, empty_wrapped_arguments,
+                                             default_origin_options, i_isolate);
+    SerializedCodeData::SourceHash hash_cons_mixed(
+        cons_mixed, empty_wrapped_arguments, default_origin_options, i_isolate);
+    SerializedCodeData::SourceHash hash_sliced(
+        sliced, empty_wrapped_arguments, default_origin_options, i_isolate);
+
+    CHECK_EQ(hash_one_byte.kSize, kSizeOfSha256Digest);
+    CHECK_EQ(hash_one_byte, hash_cons);
+    CHECK_EQ(hash_one_byte, hash_sliced);
+    CHECK_NE(hash_one_byte, hash_two_byte);
+    CHECK_EQ(hash_two_byte, hash_cons_mixed);
+
+    // A one-byte string with the exact same raw byte sequence as a two-byte
+    // string (twice the character length) must produce a different hash
+    // because the character length is included in the hash.
+    Handle<SeqOneByteString> one_byte_same_raw_bytes =
+        i_isolate->factory()
+            ->NewRawOneByteString(kTotalLength * sizeof(uint16_t))
+            .ToHandleChecked();
+    {
+      DisallowGarbageCollection no_gc;
+      CopyChars(one_byte_same_raw_bytes->GetChars(no_gc),
+                reinterpret_cast<const uint8_t*>(two_byte_data.data()),
+                kTotalLength * sizeof(uint16_t));
+    }
+    SerializedCodeData::SourceHash hash_same_raw_bytes(
+        one_byte_same_raw_bytes, empty_wrapped_arguments,
+        default_origin_options, i_isolate);
+    CHECK_NE(hash_two_byte, hash_same_raw_bytes);
+
+    // Different content of the same length produces a different hash.
+    std::string diff_ascii = full_ascii;
+    diff_ascii[550] ^= 1;
+    Handle<String> diff_content =
+        i_isolate->factory()->NewStringFromAsciiChecked(diff_ascii.c_str());
+    SerializedCodeData::SourceHash hash_diff(diff_content,
+                                             empty_wrapped_arguments,
+                                             default_origin_options, i_isolate);
+    CHECK_NE(hash_one_byte, hash_diff);
+
+    // Module origin produces different hash.
+    ScriptOriginOptions module_origin_options(false, false, false, true);
+    SerializedCodeData::SourceHash hash_module(
+        one_byte, empty_wrapped_arguments, module_origin_options, i_isolate);
+    CHECK_NE(hash_one_byte, hash_module);
+
+    // Wrapped arguments presence and contents produce different hashes.
+    Handle<FixedArray> wrapped_zero = i_isolate->factory()->NewFixedArray(0);
+    SerializedCodeData::SourceHash hash_wrapped_zero(
+        one_byte, wrapped_zero, default_origin_options, i_isolate);
+    CHECK_NE(hash_one_byte, hash_wrapped_zero);
+
+    Handle<FixedArray> wrapped_x = i_isolate->factory()->NewFixedArray(1);
+    wrapped_x->set(0, *i_isolate->factory()->NewStringFromAsciiChecked("x"));
+    Handle<FixedArray> wrapped_y = i_isolate->factory()->NewFixedArray(1);
+    wrapped_y->set(0, *i_isolate->factory()->NewStringFromAsciiChecked("y"));
+    SerializedCodeData::SourceHash hash_wrapped_x(
+        one_byte, wrapped_x, default_origin_options, i_isolate);
+    SerializedCodeData::SourceHash hash_wrapped_y(
+        one_byte, wrapped_y, default_origin_options, i_isolate);
+    CHECK_NE(hash_wrapped_zero, hash_wrapped_x);
+    CHECK_NE(hash_wrapped_x, hash_wrapped_y);
+
+    // Argument boundaries are domain-separated (["ab", "c"] != ["a", "bc"]).
+    Handle<FixedArray> wrapped_ab_c = i_isolate->factory()->NewFixedArray(2);
+    wrapped_ab_c->set(0,
+                      *i_isolate->factory()->NewStringFromAsciiChecked("ab"));
+    wrapped_ab_c->set(1, *i_isolate->factory()->NewStringFromAsciiChecked("c"));
+    Handle<FixedArray> wrapped_a_bc = i_isolate->factory()->NewFixedArray(2);
+    wrapped_a_bc->set(0, *i_isolate->factory()->NewStringFromAsciiChecked("a"));
+    wrapped_a_bc->set(1,
+                      *i_isolate->factory()->NewStringFromAsciiChecked("bc"));
+    SerializedCodeData::SourceHash hash_wrapped_ab_c(
+        one_byte, wrapped_ab_c, default_origin_options, i_isolate);
+    SerializedCodeData::SourceHash hash_wrapped_a_bc(
+        one_byte, wrapped_a_bc, default_origin_options, i_isolate);
+    CHECK_NE(hash_wrapped_ab_c, hash_wrapped_a_bc);
+  }
+
+  // 2. End-to-end code cache serialization and rejection on same-length source
+  // or parameter name change.
+  {
+    FlagScope<bool> flag_scope(&v8_flags.code_cache_source_hash_sha256, true);
+
+    v8::Local<v8::String> source1 = v8_str("function f() { return 1; }");
+    v8::Local<v8::String> source2 = v8_str("function f() { return 2; }");
+    CHECK_EQ(source1->Length(), source2->Length());
+
+    // 2a. Consuming with the exact same source succeeds.
+    {
+      v8::ScriptCompiler::Source script_source(source1);
+      v8::Local<v8::UnboundScript> script =
+          v8::ScriptCompiler::CompileUnboundScript(
+              isolate, &script_source, v8::ScriptCompiler::kEagerCompile)
+              .ToLocalChecked();
+      ScriptCompiler::CachedData* cache =
+          v8::ScriptCompiler::CreateCodeCache(script);
+      CHECK_NOT_NULL(cache);
+      CHECK(!cache->rejected);
+
+      v8::ScriptCompiler::Source consume_source(source1, cache);
+      v8::Local<v8::UnboundScript> script2 =
+          v8::ScriptCompiler::CompileUnboundScript(
+              isolate, &consume_source, v8::ScriptCompiler::kConsumeCodeCache)
+              .ToLocalChecked();
+      CHECK(!script2.IsEmpty());
+      CHECK(!consume_source.GetCachedData()->rejected);
+    }
+
+    // 2b. Consuming with different source of the same length must be rejected
+    // with SHA256.
+    {
+      v8::ScriptCompiler::Source script_source(source1);
+      v8::Local<v8::UnboundScript> script =
+          v8::ScriptCompiler::CompileUnboundScript(
+              isolate, &script_source, v8::ScriptCompiler::kEagerCompile)
+              .ToLocalChecked();
+      ScriptCompiler::CachedData* cache =
+          v8::ScriptCompiler::CreateCodeCache(script);
+      CHECK_NOT_NULL(cache);
+      CHECK(!cache->rejected);
+
+      v8::ScriptCompiler::Source consume_source(source2, cache);
+      v8::Local<v8::UnboundScript> script2 =
+          v8::ScriptCompiler::CompileUnboundScript(
+              isolate, &consume_source, v8::ScriptCompiler::kConsumeCodeCache)
+              .ToLocalChecked();
+      CHECK(!script2.IsEmpty());
+      CHECK(consume_source.GetCachedData()->rejected);
+    }
+
+    // 2c. CompileFunction cache is rejected if wrapped argument names differ.
+    {
+      v8::Local<v8::String> body = v8_str("return arguments[0];");
+      v8::Local<v8::String> arg_x = v8_str("x");
+      v8::Local<v8::String> arg_y = v8_str("y");
+      v8::ScriptCompiler::Source script_source(body);
+      v8::Local<v8::Function> fun =
+          v8::ScriptCompiler::CompileFunction(env.local(), &script_source, 1,
+                                              &arg_x, 0, nullptr,
+                                              v8::ScriptCompiler::kEagerCompile)
+              .ToLocalChecked();
+      ScriptCompiler::CachedData* cache =
+          v8::ScriptCompiler::CreateCodeCacheForFunction(fun);
+      CHECK_NOT_NULL(cache);
+      CHECK(!cache->rejected);
+
+      v8::ScriptCompiler::Source consume_source(body, cache);
+      v8::Local<v8::Function> fun2 =
+          v8::ScriptCompiler::CompileFunction(
+              env.local(), &consume_source, 1, &arg_y, 0, nullptr,
+              v8::ScriptCompiler::kConsumeCodeCache)
+              .ToLocalChecked();
+      CHECK(!fun2.IsEmpty());
+      CHECK(consume_source.GetCachedData()->rejected);
+    }
+  }
+
+  // 3. Cached data produced with SHA-256 is rejected if flag is disabled.
+  {
+    v8::Local<v8::String> source = v8_str("function f() { return 42; }");
+    ScriptCompiler::CachedData* sha256_cache;
+    {
+      FlagScope<bool> flag_scope(&v8_flags.code_cache_source_hash_sha256, true);
+      v8::ScriptCompiler::Source script_source(source);
+      v8::Local<v8::UnboundScript> script =
+          v8::ScriptCompiler::CompileUnboundScript(
+              isolate, &script_source, v8::ScriptCompiler::kEagerCompile)
+              .ToLocalChecked();
+      sha256_cache = v8::ScriptCompiler::CreateCodeCache(script);
+      CHECK_NOT_NULL(sha256_cache);
+      CHECK(!sha256_cache->rejected);
+    }
+
+    {
+      FlagScope<bool> flag_scope(&v8_flags.code_cache_source_hash_sha256,
+                                 false);
+      v8::ScriptCompiler::Source consume_source(source, sha256_cache);
+      v8::Local<v8::UnboundScript> script2 =
+          v8::ScriptCompiler::CompileUnboundScript(
+              isolate, &consume_source, v8::ScriptCompiler::kConsumeCodeCache)
+              .ToLocalChecked();
+      CHECK(!script2.IsEmpty());
+      CHECK(consume_source.GetCachedData()->rejected);
+    }
   }
 }
 

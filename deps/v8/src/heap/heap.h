@@ -39,6 +39,7 @@
 #include "src/heap/gc-callbacks.h"
 #include "src/heap/heap-allocator.h"
 #include "src/heap/marking-state.h"
+#include "src/heap/memory-reducer.h"
 #include "src/heap/minor-gc-job.h"
 #include "src/heap/pretenuring-handler.h"
 #include "src/heap/sweeper.h"
@@ -291,6 +292,10 @@ class Heap final {
   int increment_dispatch_table_allocations() {
     return ++dispatch_table_allocations_;
   }
+  int dispatch_table_gc_interval() const { return dispatch_table_gc_interval_; }
+  void set_dispatch_table_gc_interval(int interval) {
+    dispatch_table_gc_interval_ = interval;
+  }
 #endif
 
   // Emits GC events for DevTools timeline.
@@ -389,6 +394,10 @@ class Heap final {
 
   bool is_gc_tracing_category_enabled() const {
     return *gc_tracing_category_enabled_;
+  }
+
+  bool is_gc_extra_tracing_category_enabled() const {
+    return *gc_extra_tracing_category_enabled_;
   }
 
   enum class StackScanMode { kNone, kFull, kSelective };
@@ -673,8 +682,9 @@ class Heap final {
 
   void CompactWeakArrayLists();
 
-  V8_EXPORT_PRIVATE void AddRetainedMaps(DirectHandle<NativeContext> context,
-                                         GlobalHandleVector<Map> maps);
+  V8_EXPORT_PRIVATE void AddRetainedMaps(
+      DirectHandle<NativeContext> context,
+      base::Vector<const IndirectHandle<Map>> maps);
 
   // This event is triggered after object is moved to a new place.
   void OnMoveEvent(Tagged<HeapObject> source, Tagged<HeapObject> target,
@@ -909,9 +919,11 @@ class Heap final {
   V8_INLINE void SetDoubleStringCache(Tagged<DoubleStringCache> cache);
   V8_INLINE void SetCachedBigIntDivisor(Tagged<BigInt> divisor);
   V8_INLINE void SetNextCachedBigIntDivisor(Tagged<BigInt> divisor);
+  V8_INLINE void SetRegExpSplitCache(Tagged<FixedArray> cache);
 
 #if V8_ENABLE_WEBASSEMBLY
   V8_INLINE void SetWasmCanonicalRtts(Tagged<WeakFixedArray> rtts);
+  V8_INLINE void SetWasmSharedCanonicalRtts(Tagged<WeakFixedArray> rtts);
   V8_INLINE void SetJSToWasmWrappers(
       Tagged<WeakFixedArray> js_to_wasm_wrappers);
 #endif
@@ -1104,7 +1116,8 @@ class Heap final {
 
   V8_EXPORT_PRIVATE void StartIncrementalMarkingIfAllocationLimitIsReached(
       LocalHeap* local_heap, GCFlags gc_flags,
-      GCCallbackFlags gc_callback_flags = GCCallbackFlags::kNoGCCallbackFlags);
+      GCCallbackFlags gc_callback_flags = GCCallbackFlags::kNoGCCallbackFlags,
+      std::optional<GarbageCollectionReason> gc_reason = std::nullopt);
 
   // Synchronously finalizes incremental marking.
   V8_EXPORT_PRIVATE void FinalizeIncrementalMarkingAtomically(
@@ -1119,6 +1132,10 @@ class Heap final {
 
   // Ensures that sweeping is finished for that object's page.
   void EnsureSweepingCompletedForObject(Tagged<HeapObject> object);
+
+  HeapGrowingMode CurrentHeapGrowingMode();
+
+  MemoryReducerBase* memory_reducer() const { return memory_reducer_.get(); }
 
   HeapLimits* limits() const { return limits_.get(); }
 
@@ -1921,6 +1938,7 @@ class Heap final {
 
   // Performs a major collection in the whole heap.
   void MarkCompact();
+
   // Performs a minor collection of just the young generation.
   void MinorMarkSweep();
 
@@ -1956,8 +1974,6 @@ class Heap final {
   // Growing strategy. =========================================================
   // ===========================================================================
 
-  MemoryReducer* memory_reducer() { return memory_reducer_.get(); }
-
   // For some webpages NotifyLoadingEnded() is never called.
   // This constant limits the effect of load time on GC.
   // The value is arbitrary and chosen as the largest load time observed in
@@ -1991,8 +2007,6 @@ class Heap final {
   bool ShouldExpandOldGenerationOnSlowAllocation(LocalHeap* local_heap,
                                                  AllocationOrigin origin);
   bool ShouldExpandYoungGenerationOnSlowAllocation(size_t allocation_size);
-
-  HeapGrowingMode CurrentHeapGrowingMode();
 
   double PercentToOldGenerationLimit() const;
   double PercentToGlobalMemoryLimit() const;
@@ -2276,7 +2290,7 @@ class Heap final {
   std::unique_ptr<IncrementalMarking> incremental_marking_;
   std::unique_ptr<ConcurrentMarking> concurrent_marking_;
   std::unique_ptr<MemoryMeasurement> memory_measurement_;
-  std::unique_ptr<MemoryReducer> memory_reducer_;
+  std::unique_ptr<MemoryReducerBase> memory_reducer_;
   std::unique_ptr<ObjectStats> live_object_stats_;
   std::unique_ptr<ObjectStats> dead_object_stats_;
   std::unique_ptr<MinorGCJob> minor_gc_job_;
@@ -2388,6 +2402,7 @@ class Heap final {
 
 #ifdef V8_ENABLE_ALLOCATION_TIMEOUT
   int dispatch_table_allocations_ = 0;
+  int dispatch_table_gc_interval_ = v8_flags.dispatch_table_gc_interval;
 #endif
 
   std::vector<HeapObjectAllocationTracker*> allocation_trackers_;
@@ -2451,6 +2466,7 @@ class Heap final {
   std::atomic<uint64_t> total_allocated_bytes_ = 0;
 
   const uint8_t* gc_tracing_category_enabled_ = nullptr;
+  const uint8_t* gc_extra_tracing_category_enabled_ = nullptr;
   size_t notify_context_disposed_counter_ = 1;
 
   // Classes in "heap" can be friends.
@@ -2520,11 +2536,12 @@ class Heap final {
   // The Isolate constructs us.
   friend class Isolate;
 
-  // Used in cctest.
+  // Used in cctest and unittests.
   friend class heap::HeapTester;
   FRIEND_TEST(SpacesTest, InlineAllocationObserverCadence);
   FRIEND_TEST(SpacesTest, AllocationObserver);
   FRIEND_TEST(MinimalStackTest, MinimalStackInTurbofanAllocate);
+  FRIEND_TEST(HeapTest, Regress10560);
   friend class HeapInternalsBase;
 };
 
@@ -2850,6 +2867,8 @@ class ClearStaleLeftTrimmedPointerVisitor : public RootVisitor {
   void Synchronize(VisitorSynchronization::SyncTag tag) override {
     visitor_->Synchronize(tag);
   }
+
+  GarbageCollector collector() const override { return visitor_->collector(); }
 
   // The pointer compression cage base value used for decompression of all
   // tagged values except references to InstructionStream objects.

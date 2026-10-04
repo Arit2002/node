@@ -55,6 +55,8 @@
 #include "src/objects/js-shadow-realm.h"
 #include "src/objects/js-shared-array.h"
 #include "src/objects/js-struct.h"
+#include "src/objects/map-word.h"
+#include "src/objects/object-conversions-inl.h"
 #include "src/objects/property-details.h"
 #ifdef V8_TEMPORAL_SUPPORT
 #include "src/objects/js-temporal-objects-inl.h"
@@ -139,6 +141,7 @@ Maybe<bool> JSReceiver::HasProperty(LookupIterator* it) {
           JSDeferredModuleNamespace::EvaluateModuleSync(it->isolate(), holder);
           RETURN_EXCEPTION_IF_EXCEPTION(it->isolate());
         }
+        JSModuleNamespace::MaybeCountMissingDefaultWithStarExport(it);
         continue;
       }
       case LookupIterator::ACCESSOR:
@@ -194,7 +197,7 @@ Handle<Object> JSReceiver::GetDataProperty(LookupIterator* it,
         auto accessors = it->GetAccessors();
         // Special handling for AccessorInfo, which behaves like a data
         // property.
-        if (IsAccessorInfo(*accessors)) {
+        if (allow_allocation && IsAccessorInfo(*accessors)) {
           auto info = Cast<AccessorInfo>(*accessors);
           if (info->getter_side_effect_type() ==
               SideEffectType::kHasNoSideEffect) {
@@ -475,6 +478,9 @@ Maybe<bool> JSReceiver::SetOrCopyDataProperties(
     InstanceType target_instance_type = target->map()->instance_type();
     if (InstanceTypeChecker::IsJSObject(target_instance_type) &&
         !InstanceTypeChecker::IsJSGlobalProxy(target_instance_type) &&
+        // Exclude remote objects (they don't have local properties anyway).
+        !(InstanceTypeChecker::IsJSSpecialApiObject(target_instance_type) &&
+          !target->GetCreationContext().has_value()) &&
         !InstanceTypeChecker::IsAlwaysSharedSpaceJSObject(
             target_instance_type)) {
       // Convert to slow properties if we're guaranteed to overflow the number
@@ -865,23 +871,31 @@ int GetIdentityHashHelper(Tagged<JSReceiver> object) {
     return Smi::ToInt(properties);
   }
 
-  if (IsPropertyArray(properties)) {
-    return Cast<PropertyArray>(properties)->Hash();
+  Tagged<HeapObject> properties_object = Cast<HeapObject>(properties);
+  if (MapWord properties_object_map = properties_object->map_word(kRelaxedLoad);
+      properties_object_map.IsForwardingAddress()) {
+    properties_object =
+        properties_object_map.ToForwardingAddress(properties_object);
+    DCHECK(!properties_object->map_word(kRelaxedLoad).IsForwardingAddress());
   }
 
-  if (IsPropertyDictionary(properties)) {
-    return Cast<PropertyDictionary>(properties)->Hash();
+  if (IsPropertyArray(properties_object)) {
+    return Cast<PropertyArray>(properties_object)->Hash();
   }
 
-  if (IsGlobalDictionary(properties)) {
-    return Cast<GlobalDictionary>(properties)->Hash();
+  if (IsPropertyDictionary(properties_object)) {
+    return Cast<PropertyDictionary>(properties_object)->Hash();
+  }
+
+  if (IsGlobalDictionary(properties_object)) {
+    return Cast<GlobalDictionary>(properties_object)->Hash();
   }
 
 #ifdef DEBUG
   ReadOnlyRoots roots = GetReadOnlyRoots();
-  DCHECK(properties == roots.empty_fixed_array() ||
-         properties == roots.empty_property_dictionary() ||
-         properties == roots.empty_swiss_property_dictionary());
+  DCHECK(properties_object == roots.empty_fixed_array() ||
+         properties_object == roots.empty_property_dictionary() ||
+         properties_object == roots.empty_swiss_property_dictionary());
 #endif
 
   return PropertyArray::kNoHashSentinel;
@@ -1868,45 +1882,46 @@ Maybe<bool> JSReceiver::AddPrivateField(LookupIterator* it,
   DCHECK(it->GetName()->IsAnyPrivateName());
   DirectHandle<Symbol> symbol = Cast<Symbol>(it->GetName());
 
-  switch (it->state()) {
-    case LookupIterator::JSPROXY: {
-      PropertyDescriptor new_desc;
-      new_desc.set_value(Cast<JSAny>(value));
-      new_desc.set_writable(true);
-      new_desc.set_enumerable(true);
-      new_desc.set_configurable(true);
-      return JSProxy::SetPrivateSymbol(isolate, Cast<JSProxy>(receiver), symbol,
-                                       &new_desc, should_throw);
-    }
-    case LookupIterator::WASM_OBJECT:
-      RETURN_FAILURE(isolate, kThrowOnError,
-                     NewTypeError(MessageTemplate::kWasmObjectsAreOpaque));
-    case LookupIterator::MODULE_NAMESPACE:
-    case LookupIterator::DATA:
-    case LookupIterator::INTERCEPTOR:
-    case LookupIterator::ACCESSOR:
-    case LookupIterator::TYPED_ARRAY_INDEX_NOT_FOUND:
-    case LookupIterator::STRING_LOOKUP_START_OBJECT:
-      UNREACHABLE();
-
-    case LookupIterator::ACCESS_CHECK: {
-      if (!it->HasAccess()) {
-        RETURN_ON_EXCEPTION_VALUE(
-            isolate,
-            it->isolate()->ReportFailedAccessCheck(it->GetHolder<JSObject>()),
-            Nothing<bool>());
-        UNREACHABLE();
+  for (;; it->Next()) {
+    switch (it->state()) {
+      case LookupIterator::JSPROXY: {
+        PropertyDescriptor new_desc;
+        new_desc.set_value(Cast<JSAny>(value));
+        new_desc.set_writable(true);
+        new_desc.set_enumerable(true);
+        new_desc.set_configurable(true);
+        return JSProxy::SetPrivateSymbol(isolate, Cast<JSProxy>(receiver),
+                                         symbol, &new_desc, should_throw);
       }
-      break;
+      case LookupIterator::WASM_OBJECT:
+        RETURN_FAILURE(isolate, kThrowOnError,
+                       NewTypeError(MessageTemplate::kWasmObjectsAreOpaque));
+      case LookupIterator::MODULE_NAMESPACE:
+      case LookupIterator::DATA:
+      case LookupIterator::INTERCEPTOR:
+      case LookupIterator::ACCESSOR:
+      case LookupIterator::TYPED_ARRAY_INDEX_NOT_FOUND:
+      case LookupIterator::STRING_LOOKUP_START_OBJECT:
+        UNREACHABLE();
+
+      case LookupIterator::ACCESS_CHECK: {
+        if (!it->HasAccess()) {
+          RETURN_ON_EXCEPTION_VALUE(
+              isolate,
+              it->isolate()->ReportFailedAccessCheck(it->GetHolder<JSObject>()),
+              Nothing<bool>());
+          UNREACHABLE();
+        }
+        continue;
+      }
+
+      case LookupIterator::TRANSITION:
+      case LookupIterator::NOT_FOUND:
+        return Object::TransitionAndWriteDataProperty(
+            it, value, NONE, should_throw, StoreOrigin::kMaybeKeyed);
     }
-
-    case LookupIterator::TRANSITION:
-    case LookupIterator::NOT_FOUND:
-      break;
+    UNREACHABLE();
   }
-
-  return Object::TransitionAndWriteDataProperty(it, value, NONE, should_throw,
-                                                StoreOrigin::kMaybeKeyed);
 }
 
 // static
@@ -2734,6 +2749,8 @@ int JSObject::GetHeaderSize(InstanceType type) {
       return JSSegments::kHeaderSize;
 #endif  // V8_INTL_SUPPORT
 #if V8_ENABLE_WEBASSEMBLY
+    case WASM_CUSTOM_MAP_WRAPPER_TYPE:
+      return WasmCustomMapWrapper::kHeaderSize;
     case WASM_GLOBAL_OBJECT_TYPE:
       return WasmGlobalObject::kHeaderSize;
     case WASM_INSTANCE_OBJECT_TYPE:
@@ -3035,6 +3052,9 @@ void JSObject::JSObjectShortPrint(StringStream* accumulator) {
     case CPP_HEAP_EXTERNAL_OBJECT_TYPE:
       accumulator->Add("<CppHeapExternalObject>");
       break;
+    case CPP_GCMANAGED_BASE_TYPE:
+      accumulator->Add("<CppGCManagedBase>");
+      break;
 
     default: {
       Tagged<Map> map_of_this = map();
@@ -3233,7 +3253,7 @@ void MigrateFastToFast(Isolate* isolate, DirectHandle<JSObject> object,
             object->property_array()->length().value()) {
       // Allocate HeapNumbers for double fields.
       if (index.is_double()) {
-        auto value = isolate->factory()->NewHeapNumberWithHoleNaN();
+        auto value = isolate->factory()->NewUninitializedHeapNumber();
         object->FastPropertyAtPut(index, *value);
       }
       object->set_map(isolate, *new_map, kReleaseStore);
@@ -3252,7 +3272,7 @@ void MigrateFastToFast(Isolate* isolate, DirectHandle<JSObject> object,
     // Properly initialize newly added property.
     DirectHandle<Object> value;
     if (details.representation().IsDouble()) {
-      value = isolate->factory()->NewHeapNumberWithHoleNaN();
+      value = isolate->factory()->NewUninitializedHeapNumber();
     } else {
       value = isolate->factory()->uninitialized_value();
     }
@@ -3313,14 +3333,14 @@ void MigrateFastToFast(Isolate* isolate, DirectHandle<JSObject> object,
     PropertyDetails old_details = old_descriptors->GetDetails(i);
     Representation old_representation = old_details.representation();
     Representation representation = details.representation();
-    Handle<UnionOf<JSAny, Hole>> value;
+    Handle<UnionOf<JSAny, Hole, UninitializedHeapNumber>> value;
     if (old_details.location() == PropertyLocation::kDescriptor) {
       if (old_details.kind() == PropertyKind::kAccessor) {
         // In case of kAccessor -> kData property reconfiguration, the property
         // must already be prepared for data of certain type.
         DCHECK(!details.representation().IsNone());
         if (details.representation().IsDouble()) {
-          value = isolate->factory()->NewHeapNumberWithHoleNaN();
+          value = isolate->factory()->NewUninitializedHeapNumber();
         } else {
           value = isolate->factory()->uninitialized_value();
         }
@@ -3339,8 +3359,12 @@ void MigrateFastToFast(Isolate* isolate, DirectHandle<JSObject> object,
                        IsUninitializedHole(*value));
         value = Object::NewStorageFor(isolate, value, representation);
       } else if (old_representation.IsDouble() && !representation.IsDouble()) {
-        value = Object::WrapForRead(isolate, Cast<JSAny>(value),
-                                    old_representation);
+        if (IsUninitializedHeapNumber(*value)) {
+          value = isolate->factory()->uninitialized_value();
+        } else {
+          value = Object::WrapForRead(isolate, Cast<JSAny>(value),
+                                      old_representation);
+        }
       }
     }
     DCHECK(!(representation.IsDouble() && IsSmi(*value)));
@@ -3361,7 +3385,7 @@ void MigrateFastToFast(Isolate* isolate, DirectHandle<JSObject> object,
     DCHECK_EQ(PropertyKind::kData, details.kind());
     DirectHandle<Object> value;
     if (details.representation().IsDouble()) {
-      value = isolate->factory()->NewHeapNumberWithHoleNaN();
+      value = isolate->factory()->NewUninitializedHeapNumber();
     } else {
       value = isolate->factory()->uninitialized_value();
     }
@@ -3451,9 +3475,16 @@ void MigrateFastToSlow(Isolate* isolate, DirectHandle<JSObject> object,
       if (details.kind() == PropertyKind::kData) {
         value = direct_handle(object->RawFastPropertyAt(index), isolate);
         if (details.representation().IsDouble()) {
-          DCHECK(IsHeapNumber(*value));
-          double old_value = Cast<HeapNumber>(value)->value();
-          value = isolate->factory()->NewHeapNumber(old_value);
+          if (IsUninitializedHeapNumber(*value)) {
+            // This might happen when we are migrating a half-initialized
+            // object literal in order to replace this property with an
+            // accessor pair.
+            value = isolate->factory()->uninitialized_value();
+          } else {
+            DCHECK(IsHeapNumber(*value));
+            double old_value = Cast<HeapNumber>(value)->value();
+            value = isolate->factory()->NewHeapNumber(old_value);
+          }
         }
       } else {
         DCHECK_EQ(PropertyKind::kAccessor, details.kind());
@@ -3645,7 +3676,8 @@ void JSObject::AllocateStorageForMap(Isolate* isolate,
     Representation representation = details.representation();
     if (!representation.IsDouble()) continue;
     FieldIndex index = FieldIndex::ForDetails(*map, details);
-    auto box = isolate->factory()->NewHeapNumberWithHoleNaN();
+    auto box = isolate->factory()->NewUninitializedHeapNumber();
+
     if (index.is_inobject()) {
       storage->set(index.property_index(), *box);
     } else {
@@ -3817,9 +3849,9 @@ Maybe<bool> JSObject::DefineOwnPropertyIgnoreAttributes(
         InterceptorResult result;
         if (semantics == EnforceDefineSemantics::kDefine) {
           PropertyDescriptor descriptor;
-          descriptor.set_configurable((attributes & DONT_DELETE) != 0);
-          descriptor.set_enumerable((attributes & DONT_ENUM) != 0);
-          descriptor.set_writable((attributes & READ_ONLY) != 0);
+          descriptor.set_configurable((attributes & DONT_DELETE) == 0);
+          descriptor.set_enumerable((attributes & DONT_ENUM) == 0);
+          descriptor.set_writable((attributes & READ_ONLY) == 0);
           descriptor.set_value(Cast<JSAny>(value));
           if (!DefinePropertyWithInterceptorInternal(it, it->GetInterceptor(),
                                                      should_throw, &descriptor)
@@ -4315,7 +4347,9 @@ bool TestDictionaryPropertiesIntegrityLevel(Tagged<Dictionary> dict,
     if (Object::FilterKey(key, ALL_PROPERTIES)) continue;
     PropertyDetails details = dict->DetailsAt(i);
     if (details.IsConfigurable()) return false;
-    if (level == FROZEN && details.kind() == PropertyKind::kData &&
+    if (level == FROZEN &&
+        (details.kind() == PropertyKind::kData ||
+         IsAccessorInfo(dict->ValueAt(i))) &&
         !details.IsReadOnly()) {
       return false;
     }
@@ -4334,7 +4368,9 @@ bool TestFastPropertiesIntegrityLevel(Tagged<Map> map,
     if (descriptors->GetKey(i)->IsAnyPrivate()) continue;
     PropertyDetails details = descriptors->GetDetails(i);
     if (details.IsConfigurable()) return false;
-    if (level == FROZEN && details.kind() == PropertyKind::kData &&
+    if (level == FROZEN &&
+        (details.kind() == PropertyKind::kData ||
+         IsAccessorInfo(descriptors->GetStrongValue(i))) &&
         !details.IsReadOnly()) {
       return false;
     }
@@ -5953,7 +5989,7 @@ Tagged<Object> JSDate::GetUTCField(FieldIndex index, double value,
   int64_t time_ms = static_cast<int64_t>(value);
 
   if (index == kTimezoneOffset) {
-    return Smi::FromInt(date_cache->TimezoneOffset(time_ms));
+    return Smi::FromInt(date_cache->TimezoneOffsetMs(time_ms));
   }
 
   int days = DateCache::DaysFromTime(time_ms);

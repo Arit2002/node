@@ -870,20 +870,16 @@ int32_t memory_fill_wrapper(Address trusted_data_addr, uint32_t mem_index,
 }
 
 namespace {
-inline void* ArrayElementAddress(Address array, uint32_t index,
-                                 int element_size_bytes) {
-  return reinterpret_cast<void*>(array + WasmArray::kHeaderSize -
-                                 kHeapObjectTag + index * element_size_bytes);
-}
 inline void* ArrayElementAddress(Tagged<WasmArray> array, uint32_t index,
                                  int element_size_bytes) {
-  return ArrayElementAddress(array.ptr(), index, element_size_bytes);
+  return reinterpret_cast<void*>(array.ptr() + array->header_size() -
+                                 kHeapObjectTag + index * element_size_bytes);
 }
 }  // namespace
 
-void array_copy_wrapper(Address raw_dst_array, uint32_t dst_index,
-                        Address raw_src_array, uint32_t src_index,
-                        uint32_t length) {
+DISABLE_TSAN void array_copy_wrapper(Address raw_dst_array, uint32_t dst_index,
+                                     Address raw_src_array, uint32_t src_index,
+                                     uint32_t length) {
   DCHECK_GT(length, 0);
   DisallowGarbageCollection no_gc;
   Tagged<WasmArray> dst_array = Cast<WasmArray>(Tagged<Object>(raw_dst_array));
@@ -919,13 +915,16 @@ void array_copy_wrapper(Address raw_dst_array, uint32_t dst_index,
   }
 }
 
-void array_fill_wrapper(Address raw_array, uint32_t index, uint32_t length,
-                        uint32_t emit_write_barrier, uint32_t raw_type,
-                        Address initial_value_addr) {
+DISABLE_TSAN void array_fill_wrapper(Address raw_array, uint32_t index,
+                                     uint32_t length,
+                                     uint32_t emit_write_barrier,
+                                     uint32_t raw_type,
+                                     Address initial_value_addr) {
   DisallowGarbageCollection no_gc;
+  Tagged<WasmArray> array = Cast<WasmArray>(Tagged<Object>(raw_array));
   ValueType type = ValueType::FromRawBitField(raw_type);
   int8_t* initial_element_address = reinterpret_cast<int8_t*>(
-      ArrayElementAddress(raw_array, index, type.value_kind_size()));
+      ArrayElementAddress(array, index, type.value_kind_size()));
   const int bytes_to_set = length * type.value_kind_size();
 
   // We implement the general case by setting the first 8 bytes manually, then
@@ -1025,7 +1024,6 @@ void array_fill_wrapper(Address raw_array, uint32_t index, uint32_t length,
 
   if (emit_write_barrier) {
     DCHECK(type.is_ref());
-    Tagged<WasmArray> array = Cast<WasmArray>(Tagged<Object>(raw_array));
     Isolate* isolate = Isolate::Current();
     ObjectSlot start(reinterpret_cast<Address>(initial_element_address));
     ObjectSlot end(
@@ -1121,7 +1119,7 @@ void suspend_stack(Isolate* isolate, wasm::StackMemory* to, Address sp,
                    Address fp, Address pc) {
   wasm::StackMemory* from = isolate->isolate_data()->active_stack();
   auto suspender = isolate->isolate_data()->active_suspender();
-  suspender->set_stack(isolate, from);
+  suspender->set_stack(from);
   suspender->clear_parent();
   if (v8_flags.trace_wasm_stack_switching) {
     PrintF("Switch from stack %d to %d (suspend)\n", from->id(), to->id());
@@ -1338,8 +1336,8 @@ void return_stack(Isolate* isolate, wasm::StackMemory* to) {
 void return_jspi_stack(Isolate* isolate, wasm::StackMemory* to) {
   Tagged<WasmSuspenderObject> suspender =
       isolate->isolate_data()->active_suspender();
-  // Clear the external stack pointer to avoid a UAF.
-  suspender->set_stack(isolate, nullptr);
+  // Clear the stack pointer to avoid a UAF.
+  suspender->set_stack(nullptr);
   return_stack(isolate, to);
 }
 
@@ -1362,6 +1360,7 @@ void cont_bind(Address cont_raw, wasm::StackMemory* stack, int num_args,
   stack->bind_arguments(num_args);
   stack->set_signature_id(CanonicalTypeIndex{new_sig});
   stack->set_current_continuation(cont);
+  stack->set_contains_only_old_pointers(false);
 }
 
 intptr_t switch_to_the_central_stack(Isolate* isolate, uintptr_t current_sp) {

@@ -22,6 +22,8 @@ namespace internal {
 // This class holds data required during deoptimization. It does not have its
 // own instance type.
 class DeoptimizationLiteralArray : public TrustedWeakFixedArray {
+  V8_IT_NO_AUTO_CHECKER;
+
  public:
   // Getters for literals. These include runtime checks that the pointer was not
   // cleared, if the literal was held weakly.
@@ -44,7 +46,6 @@ enum class DeoptimizationLiteralKind : uint8_t {
   kNumber,
   kSignedBigInt64,
   kUnsignedBigInt64,
-  kHoleNaN,
   kInvalid,
 
   // These kinds are used by Wasm only (as unoptimized JS doesn't have these
@@ -84,12 +85,6 @@ class DeoptimizationLiteral {
   explicit DeoptimizationLiteral(Tagged<Smi> smi)
       : kind_(DeoptimizationLiteralKind::kWasmI31Ref), int32_(smi.value()) {}
 
-  static DeoptimizationLiteral HoleNaN() {
-    DeoptimizationLiteral literal;
-    literal.kind_ = DeoptimizationLiteralKind::kHoleNaN;
-    return literal;
-  }
-
   IndirectHandle<Object> object() const { return object_; }
 
   bool operator==(const DeoptimizationLiteral& other) const {
@@ -109,8 +104,6 @@ class DeoptimizationLiteral {
         return int64_ == other.int64_;
       case DeoptimizationLiteralKind::kUnsignedBigInt64:
         return uint64_ == other.uint64_;
-      case DeoptimizationLiteralKind::kHoleNaN:
-        return other.kind() == DeoptimizationLiteralKind::kHoleNaN;
       case DeoptimizationLiteralKind::kInvalid:
         return true;
       case DeoptimizationLiteralKind::kWasmFloat32:
@@ -121,7 +114,8 @@ class DeoptimizationLiteral {
     UNREACHABLE();
   }
 
-  DirectHandle<Object> Reify(Isolate* isolate) const;
+  template <typename IsolateT>
+  DirectHandle<Object> Reify(IsolateT* isolate) const;
 
 #if V8_ENABLE_WEBASSEMBLY
   Float64 GetFloat64() const {
@@ -186,6 +180,8 @@ class DeoptimizationLiteral {
 // transform an optimized frame back into one or more unoptimized frames.
 enum class TranslationOpcode;
 class DeoptimizationFrameTranslation : public TrustedByteArray {
+  V8_IT_NO_AUTO_CHECKER;
+
  public:
   struct FrameCount {
     int total_frame_count;
@@ -193,17 +189,6 @@ class DeoptimizationFrameTranslation : public TrustedByteArray {
   };
 
   class Iterator;
-
-#ifdef V8_USE_ZLIB
-  // Constants describing compressed DeoptimizationFrameTranslation layout. Only
-  // relevant if
-  // --turbo-compress-frame-translation is enabled.
-  static constexpr int kUncompressedSizeOffset = 0;
-  static constexpr int kUncompressedSizeSize = kInt32Size;
-  static constexpr int kCompressedDataOffset =
-      kUncompressedSizeOffset + kUncompressedSizeSize;
-  static constexpr int kDeoptimizationFrameTranslationElementSize = kInt32Size;
-#endif  // V8_USE_ZLIB
 
 #ifdef ENABLE_DISASSEMBLER
   void PrintFrameTranslation(
@@ -239,7 +224,6 @@ class DeoptTranslationIterator {
   uint32_t NextUnsignedOperandAtPreviousIndex();
   void SkipOpcodeAndItsOperandsAtPreviousIndex();
 
-  std::vector<int32_t> uncompressed_contents_;
   const base::Vector<const uint8_t> buffer_;
   int index_;
 
@@ -271,6 +255,8 @@ class DeoptimizationFrameTranslation::Iterator
 //
 // It can be empty.
 class DeoptimizationData : public ProtectedFixedArray {
+  V8_IT_NO_AUTO_CHECKER;
+
  public:
   using SharedFunctionInfoWrapperOrSmi =
       UnionOf<Smi, SharedFunctionInfoWrapper>;

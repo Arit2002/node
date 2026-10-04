@@ -87,6 +87,11 @@ V8_OBJECT class SourceTextModule : public Module {
             DirectHandleVector<JSMessageObject>>
   GetStalledTopLevelAwaitMessages(Isolate* isolate);
 
+  // https://tc39.es/proposal-defer-import-eval/#sec-IsModuleSCCEvaluated
+  // This function checks if the Strongly Connected Component (SCC) that the
+  // module participates is evaluated.
+  static bool IsModuleSCCEvaluated(Handle<SourceTextModule> module);
+
   static void GatherAsynchronousTransitiveDependencies(
       Isolate* isolate, Handle<Module> module,
       UnorderedModuleSet* evaluation_set,
@@ -236,7 +241,7 @@ V8_OBJECT class SourceTextModule : public Module {
                                        AvailableAncestorsSet* exec_list);
 
   // Implementation of spec concrete method Evaluate.
-  static V8_WARN_UNUSED_RESULT MaybeDirectHandle<Object> Evaluate(
+  static V8_WARN_UNUSED_RESULT MaybeDirectHandle<JSPromise> Evaluate(
       Isolate* isolate, Handle<SourceTextModule> module);
 
   // Implementation of spec abstract operation InnerModuleEvaluation.
@@ -282,13 +287,13 @@ V8_OBJECT class SourceTextModule : public Module {
   TaggedMember<FixedArray> regular_exports_;
   TaggedMember<FixedArray> regular_imports_;
   TaggedMember<FixedArray> requested_modules_;
-  TaggedMember<UnionOf<TheHole, JSObject>> import_meta_;
+  V8_TQ_ACQ_REL TaggedMember<UnionOf<TheHole, JSObject>> import_meta_;
   TaggedMember<UnionOf<SourceTextModule, TheHole>> cycle_root_;
   TaggedMember<ArrayList> async_parent_modules_;
   TaggedMember<Smi> dfs_index_;
   TaggedMember<Smi> dfs_ancestor_index_;
   TaggedMember<Smi> pending_async_dependencies_;
-  TaggedMember<Smi> flags_;
+  TaggedMember<Smi> flags_ V8_TQ_TYPE(SmiTagged<SourceTextModuleFlags>);
 } V8_OBJECT_END;
 
 template <>
@@ -302,6 +307,8 @@ struct ObjectTraits<SourceTextModule> {
 // SourceTextModuleInfo is to SourceTextModuleDescriptor what ScopeInfo is to
 // Scope.
 class SourceTextModuleInfo : public FixedArray {
+  V8_IT_NO_AUTO_CHECKER;
+
  public:
   template <typename IsolateT>
   V8_EXPORT_PRIVATE static DirectHandle<SourceTextModuleInfo> New(
@@ -320,6 +327,9 @@ class SourceTextModuleInfo : public FixedArray {
   Tagged<FixedArray> RegularExportExportNames(int i) const;
 
   inline bool Equals(Tagged<SourceTextModuleInfo> other) const;
+
+  // Whether the module has at least one `export * from '...'` statement.
+  bool HasStarExports() const;
 
  private:
   template <typename Impl>
@@ -381,7 +391,7 @@ V8_OBJECT class ModuleRequest : public Struct {
  public:
   TaggedMember<String> specifier_;
   TaggedMember<FixedArray> import_attributes_;
-  TaggedMember<Smi> flags_;
+  TaggedMember<Smi> flags_ V8_TQ_TYPE(SmiTagged<ModuleRequestFlags>);
 } V8_OBJECT_END;
 
 V8_OBJECT class SourceTextModuleInfoEntry : public Struct {

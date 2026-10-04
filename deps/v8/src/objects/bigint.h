@@ -88,6 +88,9 @@ class ValueSerializer;
 // BigIntBase is just the raw data object underlying a BigInt. Use with care!
 // Most code should be using BigInts instead.
 V8_OBJECT class BigIntBase : public PrimitiveHeapObject {
+  V8_IT_OWN_TYPE;
+  V8_IT_NO_AUTO_DISPATCH;
+
  public:
   inline uint32_t length() const {
     return LengthBits::decode(bitfield_.load(std::memory_order_relaxed));
@@ -170,6 +173,7 @@ V8_OBJECT class BigIntBase : public PrimitiveHeapObject {
 } V8_OBJECT_END;
 
 V8_OBJECT class FreshlyAllocatedBigInt : public BigIntBase {
+  V8_IT_REUSE_PARENT;
   // This class is essentially the publicly accessible abstract version of
   // MutableBigInt (which is a hidden implementation detail). It serves as
   // the return type of Factory::NewBigInt, and makes it possible to enforce
@@ -192,6 +196,9 @@ V8_OBJECT class FreshlyAllocatedBigInt : public BigIntBase {
 
 // Arbitrary precision integers in JavaScript.
 V8_OBJECT class BigInt : public BigIntBase {
+  V8_IT_REUSE_PARENT;
+  V8_IT_NO_AUTO_CHECKER;
+
  public:
   // Implementation of the Spec methods, see:
   // https://tc39.es/proposal-bigint/#sec-numeric-types
@@ -248,10 +255,16 @@ V8_OBJECT class BigInt : public BigIntBase {
   static MaybeDirectHandle<BigInt> AsUintN(Isolate* isolate, uint64_t n,
                                            DirectHandle<BigInt> x);
 
-  V8_EXPORT_PRIVATE static Handle<BigInt> FromInt64(Isolate* isolate,
-                                                    int64_t n);
-  V8_EXPORT_PRIVATE static Handle<BigInt> FromUint64(Isolate* isolate,
-                                                     uint64_t n);
+  template <typename IsolateT>
+  EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE)
+  static Handle<BigInt> FromInt64(
+      IsolateT* isolate, int64_t n,
+      AllocationType allocation = AllocationType::kYoung);
+  template <typename IsolateT>
+  EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE)
+  static Handle<BigInt> FromUint64(
+      IsolateT* isolate, uint64_t n,
+      AllocationType allocation = AllocationType::kYoung);
   static MaybeDirectHandle<BigInt> FromWords64(Isolate* isolate, int sign_bit,
                                                uint32_t words64_count,
                                                const uint64_t* words);

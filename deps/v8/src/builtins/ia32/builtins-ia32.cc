@@ -111,7 +111,7 @@ void Generate_JSBuiltinsConstructStubHelper(MacroAssembler* masm) {
     Generate_PushArguments(masm, esi, eax, ecx, no_reg,
                            ArgumentsElementType::kRaw);
     // The receiver for the builtin/api call.
-    __ PushRoot(RootIndex::kTheHoleValue);
+    __ PushRoot(RootIndex::kTdzHoleValue);
 
     // Call the function.
     // eax: number of arguments (untagged)
@@ -185,9 +185,9 @@ void Builtins::Generate_JSConstructStubGeneric(MacroAssembler* masm) {
   __ CallBuiltin(Builtin::kFastNewObject);
   __ jmp(&post_instantiation_deopt_entry, Label::kNear);
 
-  // Else: use TheHoleValue as receiver for constructor call
+  // Else: use TdzHoleValue as receiver for constructor call
   __ bind(&not_create_implicit_receiver);
-  __ LoadRoot(eax, RootIndex::kTheHoleValue);
+  __ LoadRoot(eax, RootIndex::kTdzHoleValue);
 
   // ----------- S t a t e -------------
   //  --                         eax: implicit receiver
@@ -259,7 +259,7 @@ void Builtins::Generate_JSConstructStubGeneric(MacroAssembler* masm) {
   // on-stack receiver as the result.
   __ bind(&use_receiver);
   __ mov(eax, Operand(esp, 0 * kSystemPointerSize));
-  __ JumpIfRoot(eax, RootIndex::kTheHoleValue, &do_throw);
+  __ JumpIfRoot(eax, RootIndex::kTdzHoleValue, &do_throw);
 
   __ bind(&leave_and_return);
   // Restore arguments count from the frame.
@@ -1579,7 +1579,7 @@ void Builtins::Generate_InterpreterPushArgsThenFastConstructFunction(
   __ EnterFrame(StackFrame::FAST_CONSTRUCT);
   __ Push(esi);
   // Implicit receiver stored in the construct frame.
-  __ PushRoot(RootIndex::kTheHoleValue);
+  __ PushRoot(RootIndex::kTdzHoleValue);
 
   // Push arguments + implicit receiver
   __ movd(eax, xmm0);  // Recover number of arguments.
@@ -1589,7 +1589,7 @@ void Builtins::Generate_InterpreterPushArgsThenFastConstructFunction(
   __ neg(esi);
   __ add(esi, ecx);
   GenerateInterpreterPushArgs(masm, esi, ecx);
-  __ PushRoot(RootIndex::kTheHoleValue);
+  __ PushRoot(RootIndex::kTdzHoleValue);
 
   // Restore context.
   __ mov(esi, Operand(ebp, FastConstructFrameConstants::kContextOffset));
@@ -1642,7 +1642,7 @@ void Builtins::Generate_InterpreterPushArgsThenFastConstructFunction(
   // on-stack receiver as the result.
   __ bind(&use_receiver);
   __ mov(eax, Operand(esp, 0 * kSystemPointerSize));
-  __ JumpIfRoot(eax, RootIndex::kTheHoleValue, &do_throw);
+  __ JumpIfRoot(eax, RootIndex::kTdzHoleValue, &do_throw);
 
   __ bind(&leave_and_return);
   __ LeaveFrame(StackFrame::FAST_CONSTRUCT);
@@ -3373,6 +3373,7 @@ void SwitchStacks(MacroAssembler* masm, ExternalReference fn,
 void ReloadParentStack(MacroAssembler* masm, Register promise,
                        Register return_value, Register context, Register tmp,
                        Register tmp2) {
+  DCHECK_NE(tmp, tmp2);
   Register active_stack = tmp;
   __ LoadRootRelative(active_stack, IsolateData::active_stack_offset());
 
@@ -3384,7 +3385,10 @@ void ReloadParentStack(MacroAssembler* masm, Register promise,
   // Switch stack!
   SwitchStacks(masm, ExternalReference::wasm_return_jspi_stack(), parent,
                nullptr, no_reg, {promise, return_value, context, parent});
+  __ mov(tmp, Operand(parent, wasm::kStackPcOffset));
   LoadJumpBuffer(masm, parent, false);
+  __ mov(MemOperand(ebp, WasmJspiFrameConstants::kParentReturnAddressOffset),
+         tmp);
 }
 
 // Loads the context field of the WasmTrustedInstanceData or WasmImportData
@@ -3524,6 +3528,8 @@ void SwitchBackAndReturnPromise(MacroAssembler* masm, Register tmp,
   }
 
   __ bind(return_promise);
+  // The initial wrapper and a resume callback have different argument cleanup.
+  __ jmp(MemOperand(ebp, WasmJspiFrameConstants::kParentReturnAddressOffset));
 }
 
 void GenerateExceptionHandlingLandingPad(MacroAssembler* masm,
@@ -3573,6 +3579,17 @@ void GenerateExceptionHandlingLandingPad(MacroAssembler* masm,
 
 void JSToWasmWrapperHelper(MacroAssembler* masm, wasm::Promise mode) {
   bool stack_switch = mode == wasm::kPromise || mode == wasm::kStressSwitch;
+  Label stack_overflow;
+
+  // The first GP parameter holds the trusted instance data or the import data.
+  // This is handled specially.
+  constexpr int unpadded_stack_params_offset =
+      (arraysize(wasm::kGpParamRegisters) - 1) * kSystemPointerSize +
+      arraysize(wasm::kFpParamRegisters) * kDoubleSize;
+  constexpr int param_padding =
+      unpadded_stack_params_offset & kSystemPointerSize;
+  constexpr int stack_params_offset =
+      unpadded_stack_params_offset + param_padding;
   __ EnterFrame(stack_switch ? StackFrame::WASM_JSPI : StackFrame::JS_TO_WASM);
 
   constexpr int kNumSpillSlots = WasmJspiFrameConstants::kNumSpillSlots;
@@ -3605,21 +3622,60 @@ void JSToWasmWrapperHelper(MacroAssembler* masm, wasm::Promise mode) {
                       JSToWasmWrapperFrameConstants::kResultArrayParamOffset));
     __ mov(MemOperand(ebp, WasmJspiFrameConstants::kResultArrayOffset),
            result_array);
+    __ Move(MemOperand(ebp, WasmJspiFrameConstants::kGCScanSlotCountOffset),
+            Immediate(0));
   }
 
+  // Calculate the stack space required for return values.
   Register result_size = eax;
-  original_fp = no_reg;
-
-  MemOperand GCScanSlotPlace =
-      MemOperand(ebp, WasmJspiFrameConstants::kGCScanSlotCountOffset);
-  __ Move(GCScanSlotPlace, Immediate(0));
-
   __ mov(
       result_size,
       MemOperand(
           wrapper_buffer,
           JSToWasmWrapperFrameConstants::kWrapperBufferStackReturnBufferSize));
   __ shl(result_size, kSystemPointerSizeLog2);
+
+  // Preemptive Stack Overflow Check:
+  // Before allocating stack space for return values or pushing stack
+  // parameters (which could blindly overflow past the real stack limit,
+  // triggering DCHECK failures or crashes due to stack overflow), we calculate
+  // the total upcoming stack footprint and check if it fits.
+  {
+    // LocationAllocatorForParams reserves a fixed-size region of
+    // `stack_params_offset` bytes at `[params_start, params_start +
+    // stack_params_offset)` for all GP and FP register parameters (even if
+    // unused), and places stack parameters starting at `params_start +
+    // stack_params_offset`. Thus `params_end - params_start -
+    // stack_params_offset` is the exact stack parameter size (>= 0).
+    //
+    // Register Choices:
+    // - total_space: edx (scratch, will hold total bytes needed on stack).
+    // - hypothetical_esp: esi (scratch, original_fp is no longer needed).
+    //   Cannot use ecx because ecx holds new_wrapper_buffer (under
+    //   stack-switching), nor edi which holds wrapper_buffer.
+    Register total_space = edx;
+    __ mov(total_space,
+           MemOperand(wrapper_buffer,
+                      JSToWasmWrapperFrameConstants::kWrapperBufferParamEnd));
+    __ sub(total_space,
+           MemOperand(wrapper_buffer,
+                      JSToWasmWrapperFrameConstants::kWrapperBufferParamStart));
+    __ sub(total_space, Immediate(stack_params_offset));
+    __ add(total_space, result_size);
+
+    // Compare esp - total_space with the real stack limit.
+    // Note: esp - total_space will not underflow because esp is a valid stack
+    // pointer (far above 0) and total_space is bounded by Wasm limits (~tens of
+    // KiB). Thus, the unsigned comparison (below) against the real stack limit
+    // is safe.
+    Register hypothetical_esp = esi;
+    __ mov(hypothetical_esp, esp);
+    __ sub(hypothetical_esp, total_space);
+    __ CompareStackLimit(hypothetical_esp, StackLimitKind::kRealStackLimit);
+    __ j(below, &stack_overflow);
+  }
+
+  // Allocate stack space for return values.
   __ sub(esp, result_size);
   __ mov(
       MemOperand(
@@ -3640,16 +3696,8 @@ void JSToWasmWrapperHelper(MacroAssembler* masm, wasm::Promise mode) {
          MemOperand(wrapper_buffer,
                     JSToWasmWrapperFrameConstants::kWrapperBufferParamEnd));
 
+  // Push stack parameters on the stack.
   Register last_stack_param = ecx;
-
-  // The first GP parameter holds the trusted instance data or the import data.
-  // This is handled specially.
-  int stack_params_offset =
-      (arraysize(wasm::kGpParamRegisters) - 1) * kSystemPointerSize +
-      arraysize(wasm::kFpParamRegisters) * kDoubleSize;
-
-  int param_padding = stack_params_offset & kSystemPointerSize;
-  stack_params_offset += param_padding;
   __ lea(last_stack_param, MemOperand(params_start, stack_params_offset));
 
   Label loop_start;
@@ -3696,10 +3744,6 @@ void JSToWasmWrapperHelper(MacroAssembler* masm, wasm::Promise mode) {
   __ mov(call_target,
          MemOperand(wrapper_buffer,
                     JSToWasmWrapperFrameConstants::kWrapperBufferCallTarget));
-  if (stack_switch) {
-    __ Move(MemOperand(ebp, WasmJspiFrameConstants::kGCScanSlotCountOffset),
-            Immediate(0));
-  }
   __ CallWasmCodePointer(call_target);
 
   wrapper_buffer = esi;
@@ -3746,6 +3790,7 @@ void JSToWasmWrapperHelper(MacroAssembler* masm, wasm::Promise mode) {
 
   if (stack_switch) {
     SwitchBackAndReturnPromise(masm, edx, edi, mode, &return_promise);
+    __ Trap();  // Unreachable.
   }
   __ bind(&suspend);
 
@@ -3757,6 +3802,19 @@ void JSToWasmWrapperHelper(MacroAssembler* masm, wasm::Promise mode) {
   if (mode == wasm::kPromise) {
     GenerateExceptionHandlingLandingPad(masm, &return_promise);
   }
+
+  // OOL code for handling stack overflow.
+  __ bind(&stack_overflow);
+  if (stack_switch) {
+    __ mov(kContextRegister,
+           MemOperand(ebp, WasmJspiFrameConstants::kImplicitArgOffset));
+  } else {
+    __ mov(kContextRegister,
+           MemOperand(ebp, JSToWasmWrapperFrameConstants::kImplicitArgOffset));
+  }
+  GetContextFromImplicitArg(masm, kContextRegister, edx);
+  __ CallRuntime(Runtime::kThrowStackOverflow);
+  __ Trap();
 }
 }  // namespace
 
@@ -3852,6 +3910,9 @@ namespace {
 // forwards the value, the onRejected variant throws the value.
 
 void Generate_WasmResumeHelper(MacroAssembler* masm, wasm::OnResume on_resume) {
+  __ cmp(kJavaScriptCallArgCountRegister, Immediate(JSParameterCount(1)));
+  __ Check(equal, AbortReason::kJSSignatureMismatch);
+
   __ EnterFrame(StackFrame::WASM_JSPI);
 
   Register closure = kJSFunctionRegister;  // edi
@@ -5287,7 +5348,7 @@ void Builtins::Generate_RestartFrameTrampoline(MacroAssembler* masm) {
   __ LeaveFrame(StackFrame::INTERPRETED);
 
   // The arguments are already in the stack, but we might need to adapt them
-  // if the function signature changed (e.g. via LiveEdit).
+  // if the function signature changed.
   __ mov(ecx, FieldOperand(edi, offsetof(JSFunction, shared_function_info_)));
   __ movzx_w(ecx, FieldOperand(ecx, offsetof(SharedFunctionInfo,
                                              formal_parameter_count_)));

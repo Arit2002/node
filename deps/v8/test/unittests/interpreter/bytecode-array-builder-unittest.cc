@@ -88,6 +88,8 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
       .StoreAccumulatorInRegister(reg)
       .LoadTheHole()
       .StoreAccumulatorInRegister(reg)
+      .LoadTdzHole()
+      .StoreAccumulatorInRegister(reg)
       .LoadTrue()
       .StoreAccumulatorInRegister(reg)
       .LoadFalse()
@@ -363,11 +365,11 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
                                  kFeedbackIsEmbedded);
 
   // Emit unary and count operator invocations.
-  builder.UnaryOperation(Token::kInc, 1)
-      .UnaryOperation(Token::kDec, 1)
+  builder.UnaryOperation(Token::kInc, kFeedbackIsEmbedded)
+      .UnaryOperation(Token::kDec, kFeedbackIsEmbedded)
       .UnaryOperation(Token::kAdd, 1)
-      .UnaryOperation(Token::kSub, 1)
-      .UnaryOperation(Token::kBitNot, 1);
+      .UnaryOperation(Token::kSub, kFeedbackIsEmbedded)
+      .UnaryOperation(Token::kBitNot, kFeedbackIsEmbedded);
 
   // Emit unary operator invocations.
   builder.LogicalNot(ToBooleanMode::kConvertToBoolean)
@@ -408,9 +410,9 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
   builder.ThrowIfNotSuperConstructor(reg);
 
   // Hole checks.
-  builder.ThrowReferenceErrorIfHole(name)
-      .ThrowSuperAlreadyCalledIfNotHole()
-      .ThrowSuperNotCalledIfHole();
+  builder.ThrowReferenceErrorIfTdzHole(name)
+      .ThrowSuperAlreadyCalledIfNotTdzHole()
+      .ThrowSuperNotCalledIfTdzHole();
 
   // Short jumps with Imm8 operands
   {

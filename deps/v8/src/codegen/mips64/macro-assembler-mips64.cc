@@ -5075,7 +5075,11 @@ void MacroAssembler::LoadEntrypointFromJSDispatchTable(Register destination,
   Register index = destination;
   CHECK(root_array_available());
   Ld(scratch, ExternalReferenceAsOperand(IsolateFieldId::kJSDispatchTable));
-  dsrl(index, dispatch_handle, kJSDispatchHandleShift);
+  // JSDispatchHandle is an unsigned 32-bit value; dext extracts bits
+  // [31:kJSDispatchHandleShift] into the low bits in a single instruction, so
+  // handles with bit 31 set don't produce a negative table offset.
+  Dext(index, dispatch_handle, kJSDispatchHandleShift,
+       32 - kJSDispatchHandleShift);
   dsll(destination, index, kJSDispatchTableEntrySizeLog2);
   Daddu(scratch, scratch, destination);
   Ld(destination, MemOperand(scratch, JSDispatchEntry::kEntrypointOffset));
@@ -5089,7 +5093,11 @@ void MacroAssembler::LoadParameterCountFromJSDispatchTable(
   // MSARegister index = MSARegister::from_code(destination.code());
   Register index = destination;
   Ld(scratch, ExternalReferenceAsOperand(IsolateFieldId::kJSDispatchTable));
-  dsrl(index, dispatch_handle, kJSDispatchHandleShift);
+  // JSDispatchHandle is an unsigned 32-bit value; dext extracts bits
+  // [31:kJSDispatchHandleShift] into the low bits in a single instruction, so
+  // handles with bit 31 set don't produce a negative table offset.
+  Dext(index, dispatch_handle, kJSDispatchHandleShift,
+       32 - kJSDispatchHandleShift);
   dsll(destination, index, kJSDispatchTableEntrySizeLog2);
   Daddu(scratch, scratch, destination);
   static_assert(JSDispatchEntry::kParameterCountMask == 0xffff);
@@ -5105,7 +5113,11 @@ void MacroAssembler::LoadEntrypointAndParameterCountFromJSDispatchTable(
   // MSARegister index = MSARegister::from_code(parameter_count.code());
   Register index = parameter_count;
   Ld(scratch, ExternalReferenceAsOperand(IsolateFieldId::kJSDispatchTable));
-  dsrl(index, dispatch_handle, kJSDispatchHandleShift);
+  // JSDispatchHandle is an unsigned 32-bit value; dext extracts bits
+  // [31:kJSDispatchHandleShift] into the low bits in a single instruction, so
+  // handles with bit 31 set don't produce a negative table offset.
+  Dext(index, dispatch_handle, kJSDispatchHandleShift,
+       32 - kJSDispatchHandleShift);
   dsll(parameter_count, index, kJSDispatchTableEntrySizeLog2);
   Daddu(scratch, scratch, parameter_count);
   Ld(entrypoint, MemOperand(scratch, JSDispatchEntry::kEntrypointOffset));
@@ -5274,8 +5286,8 @@ void MacroAssembler::InvokeFunctionCode(
   DCHECK_IMPLIES(new_target.is_valid(), new_target == a3);
 
   Register dispatch_handle = kJavaScriptCallDispatchHandleRegister;
-  Lw(dispatch_handle,
-     FieldMemOperand(function, offsetof(JSFunction, dispatch_handle_)));
+  Lwu(dispatch_handle,
+      FieldMemOperand(function, offsetof(JSFunction, dispatch_handle_)));
 
   // On function call, call into the debugger if necessary.
   Label debug_hook, continue_after_hook;
@@ -6491,20 +6503,34 @@ void MacroAssembler::JumpCodeObject(Register code_data_container_object,
 }
 
 void MacroAssembler::CallJSFunction(Register function_object,
-                                    uint16_t argument_count) {
+                                    uint16_t expected_parameter_count) {
   Register code = kJavaScriptCallCodeStartRegister;
   Register dispatch_handle = kJavaScriptCallDispatchHandleRegister;
   Register parameter_count = s1;
   Register scratch = s2;
 
-  Lw(dispatch_handle,
-     FieldMemOperand(function_object, offsetof(JSFunction, dispatch_handle_)));
+  Lwu(dispatch_handle,
+      FieldMemOperand(function_object, offsetof(JSFunction, dispatch_handle_)));
   LoadEntrypointAndParameterCountFromJSDispatchTable(code, parameter_count,
                                                      dispatch_handle, scratch);
 
-  // Force a safe crash if the parameter count doesn't match.
-  SbxCheck(le, AbortReason::kJSSignatureMismatch, parameter_count,
-           Operand(argument_count));
+  // Force a safe crash if the parameter count doesn't match the expected count
+  // assumed at the call site, which would corrupt the stack on underapplication
+  // (caller pushes max(actual_argc, expected) slots; callee pops
+  // max(actual_argc, parameter_count) slots).
+  if (expected_parameter_count <= 1) {
+    // Both kDontAdaptArgumentsSentinel (0) and JSParameterCount(0) (1) are
+    // valid here: since actual_argc >= 1 (includes receiver), neither pads
+    // arguments and both pop actual_argc slots upon return. We cannot use an
+    // exact equality check because WasmToJS wrappers compute expected_arity
+    // via SFI::internal_formal_parameter_count_without_receiver(), which maps
+    // both cases to JSParameterCount(0) (1).
+    SbxCheck(le, AbortReason::kJSSignatureMismatch, parameter_count,
+             Operand(1));
+  } else {
+    SbxCheck(eq, AbortReason::kJSSignatureMismatch, parameter_count,
+             Operand(expected_parameter_count));
+  }
   Call(code);
 }
 

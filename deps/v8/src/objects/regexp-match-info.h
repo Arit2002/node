@@ -23,8 +23,9 @@ class String;
 // all the captured substrings), the invariant is that there are at least two
 // capture indices.  The array also contains the subject string for the last
 // successful match.
-V8_OBJECT class RegExpMatchInfo : public TaggedArrayBase<RegExpMatchInfo, Smi> {
-  using Super = TaggedArrayBase<RegExpMatchInfo, Smi>;
+V8_OBJECT class RegExpMatchInfo
+    : public TaggedArrayBase<RegExpMatchInfo, Smi, FixedArrayBase> {
+  using Super = TaggedArrayBase<RegExpMatchInfo, Smi, FixedArrayBase>;
 
  public:
   static constexpr RootIndex kMapRootIndex = RootIndex::kRegExpMatchInfoMap;
@@ -79,6 +80,8 @@ V8_OBJECT class RegExpMatchInfo : public TaggedArrayBase<RegExpMatchInfo, Smi> {
   TaggedMember<Smi> number_of_capture_registers_;
   TaggedMember<String> last_subject_;
   TaggedMember<Object> last_input_;
+  V8_TQ_TAIL_NAME(objects);
+  V8_TQ_TAIL_LENGTH(length);
   FLEXIBLE_ARRAY_MEMBER(typename Super::ElementMemberT, objects);
 } V8_OBJECT_END;
 

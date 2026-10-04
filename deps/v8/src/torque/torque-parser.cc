@@ -89,6 +89,11 @@ class BuildFlags : public base::ContextualClass<BuildFlags> {
 #else
     build_flags_["V8_ENABLE_SEEDED_ARRAY_INDEX_HASH"] = false;
 #endif
+#ifdef V8_IS_TSAN
+    build_flags_["V8_IS_TSAN"] = true;
+#else
+    build_flags_["V8_IS_TSAN"] = false;
+#endif
   }
   static bool GetFlag(const std::string& name, const char* production) {
     auto it = Get().build_flags_.find(name);
@@ -1039,6 +1044,7 @@ std::optional<ParseResult> MakeClassDeclaration(
        ANNOTATION_DO_NOT_GENERATE_CPP_CLASS, ANNOTATION_CUSTOM_CPP_CLASS,
        ANNOTATION_CUSTOM_MAP, ANNOTATION_EXPORT,
        ANNOTATION_DO_NOT_GENERATE_CAST,
+       ANNOTATION_DO_NOT_GENERATE_INSTANCE_TYPE_CHECK,
        ANNOTATION_HIGHEST_INSTANCE_TYPE_WITHIN_PARENT,
        ANNOTATION_LOWEST_INSTANCE_TYPE_WITHIN_PARENT,
        ANNOTATION_CPP_OBJECT_LAYOUT_DEFINITION},
@@ -1067,6 +1073,9 @@ std::optional<ParseResult> MakeClassDeclaration(
   }
   if (annotations.Contains(ANNOTATION_DO_NOT_GENERATE_CAST)) {
     flags |= ClassFlag::kDoNotGenerateCast;
+  }
+  if (annotations.Contains(ANNOTATION_DO_NOT_GENERATE_INSTANCE_TYPE_CHECK)) {
+    flags |= ClassFlag::kDoNotGenerateInstanceTypeCheck;
   }
   if (annotations.Contains(ANNOTATION_EXPORT)) {
     flags |= ClassFlag::kExport;
@@ -2569,6 +2578,11 @@ struct TorqueGrammar : Grammar {
             Token(";")},
            MakeClassField)};
 
+  // Result: std::vector<ClassFieldExpression>
+  // Entry point for V8_TQ_TAIL_SECTIONS payloads; not reachable from
+  // `declaration`.
+  Symbol* classFieldList = List<ClassFieldExpression>(&classField);
+
   // Result: StructFieldExpression
   Symbol structField = {
       Rule({CheckIf(Token("const")), &name, Token(":"), &type, Token(";")},
@@ -2970,6 +2984,51 @@ struct TorqueGrammar : Grammar {
 void ParseTorque(const std::string& input) {
   BuildFlags::Scope build_flags_scope;
   TorqueGrammar().Parse(input);
+}
+
+namespace {
+
+// The annotation argument parsers run once per V8_TQ_TYPE / V8_TQ_EXTENT_NAME
+// argument; the grammar is immutable after construction, so build it once.
+TorqueGrammar& AnnotationGrammar() {
+  static TorqueGrammar* grammar = new TorqueGrammar();
+  return *grammar;
+}
+
+}  // namespace
+
+TypeExpression* ParseTorqueTypeExpression(const std::string& input) {
+  BuildFlags::Scope build_flags_scope;
+  TorqueGrammar& grammar = AnnotationGrammar();
+  std::optional<ParseResult> result =
+      grammar.Parse(&grammar.type, input, CurrentSourcePosition::Get());
+  if (!result.has_value()) {
+    ReportError("cannot parse Torque type expression: ", input);
+  }
+  return std::move(*result).Cast<TypeExpression*>();
+}
+
+std::vector<ClassFieldExpression> ParseTorqueClassFields(
+    const std::string& input) {
+  BuildFlags::Scope build_flags_scope;
+  TorqueGrammar& grammar = AnnotationGrammar();
+  std::optional<ParseResult> result = grammar.Parse(
+      grammar.classFieldList, input, CurrentSourcePosition::Get());
+  if (!result.has_value()) {
+    ReportError("cannot parse Torque field declarations: ", input);
+  }
+  return std::move(*result).Cast<std::vector<ClassFieldExpression>>();
+}
+
+Expression* ParseTorqueExpression(const std::string& input) {
+  BuildFlags::Scope build_flags_scope;
+  TorqueGrammar& grammar = AnnotationGrammar();
+  std::optional<ParseResult> result =
+      grammar.Parse(grammar.expression, input, CurrentSourcePosition::Get());
+  if (!result.has_value()) {
+    ReportError("cannot parse Torque expression: ", input);
+  }
+  return std::move(*result).Cast<Expression*>();
 }
 
 }  // namespace v8::internal::torque

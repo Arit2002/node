@@ -115,11 +115,6 @@ class V8_EXPORT_PRIVATE Compiler : public AllStatic {
       Isolate* isolate, DirectHandle<JSFunction> function,
       BytecodeOffset osr_offset, ConcurrencyMode mode, CodeKind code_kind);
 
-  V8_WARN_UNUSED_RESULT static MaybeDirectHandle<SharedFunctionInfo>
-  CompileForLiveEdit(ParseInfo* parse_info, Handle<Script> script,
-                     MaybeDirectHandle<ScopeInfo> outer_scope_info,
-                     Isolate* isolate);
-
   // Collect source positions for a function that has already been compiled to
   // bytecode, but for which source positions were not collected (e.g. because
   // they were not immediately needed).
@@ -437,6 +432,12 @@ class OptimizedCompilationJob : public CompilationJob {
     return timer_.Elapsed();
   }
 
+  using RetainedMaps = base::SmallVector<IndirectHandle<Map>, 8>;
+
+  static RetainedMaps CollectRetainedMaps(
+      DirectHandle<Code> code,
+      std::unique_ptr<CanonicalHandlesMap> canonical_handles);
+
  protected:
   // Overridden by the actual implementation.
   virtual Status PrepareJobImpl(Isolate* isolate) = 0;
@@ -445,12 +446,9 @@ class OptimizedCompilationJob : public CompilationJob {
   virtual Status FinalizeJobImpl(Isolate* isolate) = 0;
 
   // Register weak object to optimized code dependencies.
-  GlobalHandleVector<Map> CollectRetainedMaps(Isolate* isolate,
-                                              DirectHandle<Code> code);
-  void RegisterWeakObjectsInOptimizedCode(Isolate* isolate,
-                                          DirectHandle<NativeContext> context,
-                                          DirectHandle<Code> code,
-                                          GlobalHandleVector<Map> maps);
+  void RegisterWeakObjectsInOptimizedCode(
+      Isolate* isolate, DirectHandle<NativeContext> context,
+      DirectHandle<Code> code, base::Vector<const IndirectHandle<Map>> maps);
 
   base::TimeDelta time_taken_to_prepare_;
   base::TimeDelta time_taken_to_execute_;

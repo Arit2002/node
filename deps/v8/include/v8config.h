@@ -354,6 +354,7 @@ path. Add it with -I<path> to the command line
 //  V8_HAS_DECLSPEC_NOINLINE            - __declspec(noinline) supported
 //  V8_HAS_DECLSPEC_SELECTANY           - __declspec(selectany) supported
 //  V8_HAS___FORCEINLINE                - __forceinline supported
+//  V8_HAS_WARNING(WARNING)             - whether WARNING is supported
 //
 // Note that testing for compilers and/or features must be done using #if
 // not #ifdef. For example, to test for Intel C++ Compiler, use:
@@ -365,6 +366,12 @@ path. Add it with -I<path> to the command line
 #define V8_HAS_CPP_ATTRIBUTE(FEATURE) __has_cpp_attribute(FEATURE)
 #else
 #define V8_HAS_CPP_ATTRIBUTE(FEATURE) 0
+#endif
+
+#if defined(__has_warning)
+#define V8_HAS_WARNING(WARNING) __has_warning(WARNING)
+#else
+#define V8_HAS_WARNING(WARNING) 0
 #endif
 
 #if defined(__clang__)
@@ -602,14 +609,10 @@ path. Add it with -I<path> to the command line
 // functions.
 // Use like:
 //   V8_NOINLINE V8_PRESERVE_MOST void UnlikelyMethod();
-#if V8_OS_WIN
-# define V8_PRESERVE_MOST
-#else
 #if V8_HAS_ATTRIBUTE_PRESERVE_MOST
 # define V8_PRESERVE_MOST __attribute__((preserve_most))
 #else
 # define V8_PRESERVE_MOST /* NOT SUPPORTED */
-#endif
 #endif
 
 

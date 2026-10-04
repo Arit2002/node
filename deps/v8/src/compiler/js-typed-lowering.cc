@@ -582,9 +582,11 @@ Reduction JSTypedLowering::ReduceJSBitwiseNot(Node* node) {
   Type input_type = NodeProperties::GetType(input);
   if (input_type.Is(Type::PlainPrimitive())) {
     // JSBitwiseNot(x) => NumberBitwiseXor(ToInt32(x), -1)
-    const FeedbackParameter& p = FeedbackParameterOf(node->op());
+    const EmbeddedHintParameter& p = EmbeddedHintParameterOf(node->op());
     node->InsertInput(graph()->zone(), 1, jsgraph()->SmiConstant(-1));
-    NodeProperties::ChangeOp(node, javascript()->BitwiseXor(p.feedback()));
+    NodeProperties::ChangeOp(
+        node,
+        javascript()->BitwiseXor(std::get<BinaryOperationHint>(p.hint())));
     JSBinopReduction r(this, node);
     r.ConvertInputsToNumber();
     r.ConvertInputsToUI32(kSigned, kSigned);
@@ -598,9 +600,10 @@ Reduction JSTypedLowering::ReduceJSDecrement(Node* node) {
   Type input_type = NodeProperties::GetType(input);
   if (input_type.Is(Type::PlainPrimitive())) {
     // JSDecrement(x) => NumberSubtract(ToNumber(x), 1)
-    const FeedbackParameter& p = FeedbackParameterOf(node->op());
+    const EmbeddedHintParameter& p = EmbeddedHintParameterOf(node->op());
     node->InsertInput(graph()->zone(), 1, jsgraph()->OneConstant());
-    NodeProperties::ChangeOp(node, javascript()->Subtract(p.feedback()));
+    NodeProperties::ChangeOp(
+        node, javascript()->Subtract(std::get<BinaryOperationHint>(p.hint())));
     JSBinopReduction r(this, node);
     r.ConvertInputsToNumber();
     DCHECK_EQ(simplified()->NumberSubtract(), r.NumberOp());
@@ -614,9 +617,10 @@ Reduction JSTypedLowering::ReduceJSIncrement(Node* node) {
   Type input_type = NodeProperties::GetType(input);
   if (input_type.Is(Type::PlainPrimitive())) {
     // JSIncrement(x) => NumberAdd(ToNumber(x), 1)
-    const FeedbackParameter& p = FeedbackParameterOf(node->op());
+    const EmbeddedHintParameter& p = EmbeddedHintParameterOf(node->op());
     node->InsertInput(graph()->zone(), 1, jsgraph()->OneConstant());
-    NodeProperties::ChangeOp(node, javascript()->Add(p.feedback()));
+    NodeProperties::ChangeOp(
+        node, javascript()->Add(std::get<BinaryOperationHint>(p.hint())));
     JSBinopReduction r(this, node);
     r.ConvertInputsToNumber();
     DCHECK_EQ(simplified()->NumberAdd(), r.NumberOp());
@@ -630,9 +634,10 @@ Reduction JSTypedLowering::ReduceJSNegate(Node* node) {
   Type input_type = NodeProperties::GetType(input);
   if (input_type.Is(Type::PlainPrimitive())) {
     // JSNegate(x) => NumberMultiply(ToNumber(x), -1)
-    const FeedbackParameter& p = FeedbackParameterOf(node->op());
+    const EmbeddedHintParameter& p = EmbeddedHintParameterOf(node->op());
     node->InsertInput(graph()->zone(), 1, jsgraph()->SmiConstant(-1));
-    NodeProperties::ChangeOp(node, javascript()->Multiply(p.feedback()));
+    NodeProperties::ChangeOp(
+        node, javascript()->Multiply(std::get<BinaryOperationHint>(p.hint())));
     JSBinopReduction r(this, node);
     r.ConvertInputsToNumber();
     return r.ChangeToPureOperator(r.NumberOp(), Type::Number());
@@ -2138,9 +2143,14 @@ Reduction JSTypedLowering::ReduceJSCall(Node* node) {
     Node* new_target = jsgraph()->UndefinedConstant();
 
     // TODO(412398354): use the dispatch handle here to avoid a runtime check.
-    int formal_count =
-        shared->internal_formal_parameter_count_without_receiver_deprecated();
-    if (formal_count > arity) {
+    int expected_formal_parameter_count =
+        shared->internal_formal_parameter_count_with_receiver_deprecated();
+
+    if (expected_formal_parameter_count > JSParameterCount(arity)) {
+      DCHECK_NE(expected_formal_parameter_count, kDontAdaptArgumentsSentinel);
+      // Formal parameter count without receiver.
+      int formal_count = expected_formal_parameter_count - kJSArgcReceiverSlots;
+
       node->RemoveInput(n.FeedbackVectorIndex());
       // Underapplication. Massage the arguments to match the expected number of
       // arguments.
@@ -2158,10 +2168,11 @@ Reduction JSTypedLowering::ReduceJSCall(Node* node) {
           graph()->zone(), formal_count + 4,
           jsgraph()->ConstantNoHole(kPlaceholderDispatchHandle.value()));
 #endif
-      NodeProperties::ChangeOp(node,
-                               common()->Call(Linkage::GetJSCallDescriptor(
-                                   graph()->zone(), false, 1 + formal_count,
-                                   flags | CallDescriptor::kCanUseRoots)));
+      NodeProperties::ChangeOp(
+          node, common()->Call(Linkage::GetJSCallDescriptor(
+                    graph()->zone(), false, JSParameterCount(formal_count),
+                    expected_formal_parameter_count,
+                    flags | CallDescriptor::kCanUseRoots)));
     } else if (shared->HasBuiltinId() &&
                Builtins::IsCpp(shared->builtin_id())) {
       // Patch {node} to a direct CEntry call.
@@ -2172,7 +2183,7 @@ Reduction JSTypedLowering::ReduceJSCall(Node* node) {
 
       // This SBXCHECK is a defense-in-depth measure to ensure that we always
       // generate valid calls here (with matching signatures).
-      SBXCHECK_GE(arity + kJSArgcReceiverSlots,
+      SBXCHECK_GE(JSParameterCount(arity),
                   Builtins::GetFormalParameterCount(builtin));
 
       // Patch {node} to a direct code object call.
@@ -2204,10 +2215,11 @@ Reduction JSTypedLowering::ReduceJSCall(Node* node) {
           graph()->zone(), arity + 4,
           jsgraph()->ConstantNoHole(kPlaceholderDispatchHandle.value()));
 #endif
-      NodeProperties::ChangeOp(node,
-                               common()->Call(Linkage::GetJSCallDescriptor(
-                                   graph()->zone(), false, 1 + arity,
-                                   flags | CallDescriptor::kCanUseRoots)));
+      NodeProperties::ChangeOp(
+          node, common()->Call(Linkage::GetJSCallDescriptor(
+                    graph()->zone(), false, JSParameterCount(arity),
+                    expected_formal_parameter_count,
+                    flags | CallDescriptor::kCanUseRoots)));
     }
     return Changed(node);
   }

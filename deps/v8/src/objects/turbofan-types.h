@@ -108,6 +108,7 @@ class TurbofanTypeHighBits {
 };
 
 V8_OBJECT class TurbofanType : public HeapObject {
+  V8_IT_ABSTRACT;
 } V8_OBJECT_END;
 
 V8_OBJECT class TurbofanBitsetType : public TurbofanType {
@@ -127,8 +128,8 @@ V8_OBJECT class TurbofanBitsetType : public TurbofanType {
  private:
   friend class TorqueGeneratedTurbofanBitsetTypeAsserts;
 
-  uint32_t bitset_low_;
-  uint32_t bitset_high_;
+  uint32_t bitset_low_ V8_TQ_TYPE(TurbofanTypeLowBits);
+  uint32_t bitset_high_ V8_TQ_TYPE(TurbofanTypeHighBits);
 } V8_OBJECT_END;
 
 V8_OBJECT class TurbofanUnionType : public TurbofanType {
@@ -191,7 +192,7 @@ V8_OBJECT class TurbofanHeapConstantType : public TurbofanType {
  private:
   friend class TorqueGeneratedTurbofanHeapConstantTypeAsserts;
 
-  TaggedMember<Object> constant_;
+  TaggedMember<HeapObject> constant_;
 } V8_OBJECT_END;
 
 V8_OBJECT class TurbofanOtherNumberConstantType : public TurbofanType {

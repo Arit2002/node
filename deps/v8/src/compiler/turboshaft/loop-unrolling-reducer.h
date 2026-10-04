@@ -276,7 +276,7 @@ class V8_EXPORT_PRIVATE LoopUnrollingAnalyzer {
   // count we have seen in some huge Wasm functions in the past, e.g., function
   // #21937 of https://crbug.com/383661627 (1.7M operations, 2.7MB wire bytes).
   static constexpr size_t kMaxFunctionSizeForPartialUnrolling = 1'000'000;
-  static constexpr size_t kJSMaxLoopSizeForPartialUnrolling = 50;
+  static constexpr size_t kJSMaxLoopSizeForPartialUnrolling = 64;
   static constexpr size_t kWasmMaxLoopSizeForPartialUnrolling = 80;
   static constexpr size_t kWasmMaxUnrolledLoopSize = 240;
   static constexpr size_t kMaxLoopIterationsForFullUnrolling = 4;
@@ -338,7 +338,7 @@ class LoopStackCheckElisionReducer : public Next {
 
 #if V8_ENABLE_WEBASSEMBLY
   V<None> REDUCE_INPUT_GRAPH(WasmStackCheck)(
-      V<Any> ig_idx, const WasmStackCheckOp& stack_check) {
+      V<None> ig_idx, const WasmStackCheckOp& stack_check) {
     if (skip_next_stack_check_ &&
         stack_check.kind == WasmStackCheckOp::Kind::kLoop) {
       skip_next_stack_check_ = false;
@@ -448,7 +448,7 @@ class LoopUnrollingReducer : public Next {
   }
 
 #if V8_ENABLE_WEBASSEMBLY
-  V<None> REDUCE_INPUT_GRAPH(WasmStackCheck)(V<Any> ig_idx,
+  V<None> REDUCE_INPUT_GRAPH(WasmStackCheck)(V<None> ig_idx,
                                              const WasmStackCheckOp& check) {
     if (ShouldSkipOptimizationStep() || !skip_next_stack_check_) {
       return Next::ReduceInputGraphWasmStackCheck(ig_idx, check);
